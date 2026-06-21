@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% block title %}Web Asset Console{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body data-csrf-token="{{ csrf_token }}">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/" aria-label="Web Asset Console 首页">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 2 4 5v6c0 5.1 3.4 9.8 8 11 4.6-1.2 8-5.9 8-11V5l-8-3Zm0 4 4 1.5v3.4c0 3.3-1.9 6.4-4 7.4-2.1-1-4-4.1-4-7.4V7.5L12 6Z"/></svg>
+        </span>
+        <span><strong>Web Asset</strong><small>Security Console</small></span>
+      </a>
+      <nav class="nav-list" aria-label="主导航">
+        <a href="/" class="nav-item {% if active_page == 'dashboard' %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><path d="M3 10.8 12 3l9 7.8V21h-6v-6H9v6H3V10.8Z"/></svg><span>控制台</span>
+        </a>
+        <a href="/#new-scan" class="nav-item">
+          <svg viewBox="0 0 24 24"><path d="M11 4a7 7 0 1 0 4.9 12l4.1 4 1.4-1.4-4-4.1A7 7 0 0 0 11 4Zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z"/></svg><span>新建扫描</span>
+        </a>
+        <a href="/assets" class="nav-item {% if active_page == 'assets' %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><path d="M4 4h16v5H4V4Zm0 7h7v9H4v-9Zm9 0h7v9h-7v-9Z"/></svg><span>资产发现</span>
+        </a>
+        <a href="/findings" class="nav-item {% if active_page == 'findings' %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><path d="M12 2 3 6v6c0 5 3.8 9.5 9 10 5.2-.5 9-5 9-10V6l-9-4Zm-1 6h2v6h-2V8Zm0 8h2v2h-2v-2Z"/></svg><span>敏感入口</span>
+        </a>
+        <a href="/tasks" class="nav-item {% if active_page == 'tasks' %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><path d="M5 3h14v18H5V3Zm3 4v2h8V7H8Zm0 4v2h8v-2H8Zm0 4v2h6v-2H8Z"/></svg><span>任务中心</span>
+        </a>
+        <a href="/settings" class="nav-item {% if active_page == 'settings' %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><path d="m19.4 13 .1-1-.1-1 2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L15 3.5h-4l-.3 2.6a8 8 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.5-.1 1 .1 1-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.3 2.6h4l.3-2.6a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5ZM13 16h-2a4 4 0 1 1 2 0Z"/></svg><span>设置</span>
+        </a>
+      </nav>
+      <div class="sidebar-status">
+        <span class="eyebrow">系统状态</span>
+        <div class="status-row"><span class="status-dot {% if tool_status.oneforall %}online{% else %}offline{% endif %}"></span>OneForAll</div>
+        <div class="status-row"><span class="status-dot {% if tool_status.nuclei %}online{% else %}muted{% endif %}"></span>Nuclei（预留）</div>
+        <a href="/settings" class="text-link">查看工具配置</a>
+      </div>
+    </aside>
+
+    <div class="main-column">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" type="button" data-sidebar-toggle aria-label="打开导航菜单">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"/></svg>
+        </button>
+        <div class="topbar-title">
+          <h1>{% block page_title %}Web 资产发现与敏感入口分类工具{% endblock %}</h1>
+          <p>{% block page_subtitle %}授权范围内的资产发现、路径探测与复测整理{% endblock %}</p>
+        </div>
+        <label class="global-search">
+          <span class="sr-only">筛选当前页面表格</span>
+          <svg viewBox="0 0 24 24"><path d="M10.5 4a6.5 6.5 0 1 0 4.6 11.1l4.4 4.4 1.4-1.4-4.4-4.4A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Z"/></svg>
+          <input type="search" placeholder="搜索域名、URL、标题或任务" data-global-search>
+        </label>
+        <div class="user-menu">
+          <span class="avatar">{{ username[:1]|upper }}</span>
+          <span>{{ username }}</span>
+          <button type="button" class="icon-button" data-logout aria-label="退出登录">
+            <svg viewBox="0 0 24 24"><path d="M10 3H4v18h6v-2H6V5h4V3Zm5.6 4.6L14.2 9l2 2H9v2h7.2l-2 2 1.4 1.4L20 12l-4.4-4.4Z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <main id="main-content" class="content">
+        {% if default_password_warning %}
+        <div class="alert warning" role="alert">
+          当前仍使用默认密码 <code>change-me</code>。部署到远程服务器前必须设置 <code>WEBAPP_PASSWORD</code>。
+        </div>
+        {% endif %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+  <div class="toast-region" aria-live="polite" data-toast-region></div>
+  <script src="{{ url_for('static', path='app.js') }}" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

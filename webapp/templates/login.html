@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录｜Web Asset Console</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="brand login-brand">
+      <span class="brand-mark"><svg viewBox="0 0 24 24"><path d="M12 2 4 5v6c0 5.1 3.4 9.8 8 11 4.6-1.2 8-5.9 8-11V5l-8-3Zm0 4 4 1.5v3.4c0 3.3-1.9 6.4-4 7.4-2.1-1-4-4.1-4-7.4V7.5L12 6Z"/></svg></span>
+      <span><strong>Web Asset Console</strong><small>安全扫描任务面板</small></span>
+    </div>
+    <div class="login-copy">
+      <h1>登录控制台</h1>
+      <p>该页面可以启动扫描任务，请使用受控账号访问。</p>
+    </div>
+    {% if error %}<div class="alert danger" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" class="form-stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label class="field"><span>用户名</span><input name="username" autocomplete="username" required autofocus></label>
+      <label class="field"><span>密码</span><input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="button primary wide" type="submit">登录</button>
+    </form>
+    <p class="login-note">默认仅监听 <code>127.0.0.1</code>，远程部署请使用 HTTPS 反向代理。</p>
+  </main>
+</body>
+</html>

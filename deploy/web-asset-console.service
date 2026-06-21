@@ -1,0 +1,21 @@
+[Unit]
+Description=Web Asset Console
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=webasset
+Group=webasset
+WorkingDirectory=/opt/web_asset_checker
+EnvironmentFile=/etc/web-asset-console.env
+ExecStart=/opt/web_asset_checker/.venv/bin/python -m webapp --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

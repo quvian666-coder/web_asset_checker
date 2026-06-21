@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}设置｜Web Asset Console{% endblock %}
+{% block page_title %}系统设置{% endblock %}
+{% block page_subtitle %}工具状态、服务路径和敏感路径分类规则{% endblock %}
+{% block content %}
+<section class="settings-grid">
+  <article class="panel"><div class="panel-header compact"><div><span class="eyebrow">运行环境</span><h2>工具状态</h2></div></div><dl class="settings-list"><div><dt>OneForAll</dt><dd><span class="status-badge {% if tool_status.oneforall %}success{% else %}failed{% endif %}">{% if tool_status.oneforall %}可用{% else %}未配置{% endif %}</span></dd></div><div><dt>OneForAll 目录</dt><dd><code>{{ tool_status.oneforall_dir }}</code></dd></div><div><dt>OneForAll Python</dt><dd><code>{{ tool_status.oneforall_python }}</code></dd></div><div><dt>Nuclei</dt><dd><span class="status-badge {% if tool_status.nuclei %}success{% else %}failed{% endif %}">{% if tool_status.nuclei %}已检测{% else %}未检测到{% endif %}</span></dd></div><div><dt>MySQL</dt><dd><code>{{ tool_status.mysql_user }}@{{ tool_status.mysql_host }}/{{ tool_status.mysql_database }}</code></dd></div><div><dt>数据目录</dt><dd><code>{{ tool_status.data_dir }}</code></dd></div></dl><p class="helper-box">MySQL 密码、系统工具路径通过 Linux 环境变量设置，前端不返回密码，避免凭据泄露和任意路径注入。</p></article>
+  <article class="panel"><div class="panel-header compact"><div><span class="eyebrow">默认限制</span><h2>安全边界</h2></div></div><ul class="check-list"><li>默认一次只执行一个扫描任务</li><li>默认最大资产数 500</li><li>只允许 small/medium 端口组</li><li>所有子域必须属于输入主域名</li><li>OneForAll 使用独立 Python 环境</li><li>Nuclei 第一版不自动执行</li></ul></article>
+</section>
+
+<section class="panel rules-panel">
+  <div class="panel-header"><div><span class="eyebrow">分类配置</span><h2>敏感路径规则</h2><p>修改后写入 <code>paths.txt</code>，新任务立即使用；运行中的任务不受影响。</p></div><div class="task-actions"><button class="button secondary" type="button" data-add-rule>新增规则</button><button class="button primary" type="button" data-save-rules>保存规则</button></div></div>
+  <div class="table-wrap"><table class="data-table rule-table" data-rules-table><thead><tr><th>启用</th><th>路径</th><th>分类</th><th>功能名称</th><th>关键词（逗号分隔）</th><th>操作</th></tr></thead><tbody>{% for rule in rules %}<tr><td><input type="checkbox" data-rule-enabled {% if rule.enabled %}checked{% endif %} aria-label="启用规则"></td><td><input value="{{ rule.path }}" data-rule-path></td><td><input value="{{ rule.category }}" data-rule-category></td><td><input value="{{ rule.function }}" data-rule-function></td><td><input value="{{ rule.keywords|join(',') }}" data-rule-keywords></td><td><button class="button ghost small danger-text" type="button" data-delete-rule>删除</button></td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}

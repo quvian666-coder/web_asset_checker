@@ -1,0 +1,16 @@
+# 每行一个站内路径，保存后新任务会自动读取全部规则
+/admin
+/login
+/manage
+/system
+/api
+/swagger-ui.html
+/swagger/index.html
+/v2/api-docs
+/doc.html
+/druid
+/actuator
+/actuator/env
+/phpinfo.php
+/.git/config
+/backup.zip

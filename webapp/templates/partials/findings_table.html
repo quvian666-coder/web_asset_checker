@@ -1,0 +1,14 @@
+<div class="table-wrap"><table class="data-table searchable"><thead><tr><th>入口 URL</th><th>功能</th><th>分类</th><th>访问状态</th><th>置信度</th><th>优先级</th><th>标题</th><th>复测建议</th></tr></thead><tbody>
+{% for item in findings %}
+<tr>
+  <td class="url-cell"><a href="{{ item.endpoint_url }}" target="_blank" rel="noopener noreferrer">{{ item.endpoint_url }}</a></td>
+  <td>{{ item.function }}</td>
+  <td><span class="tag blue">{{ item.category }}</span></td>
+  <td><span class="status-badge {{ item.access_state|lower }}">{{ item.access_state }}</span></td>
+  <td>{{ item.confidence }}</td>
+  <td><span class="priority {{ item.priority|lower }}">{{ item.priority }}</span></td>
+  <td>{{ item.title or '-' }}</td>
+  <td class="wide-cell">{{ item.next_check }}</td>
+</tr>
+{% else %}<tr><td colspan="8" class="empty-cell">暂无敏感入口结果</td></tr>{% endfor %}
+</tbody></table></div>

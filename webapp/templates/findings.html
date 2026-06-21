@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}敏感入口｜Web Asset Console{% endblock %}
+{% block page_title %}敏感入口结果{% endblock %}
+{% block page_subtitle %}带功能识别、访问状态、置信度和复测建议的 URL 清单{% endblock %}
+{% block content %}
+<section class="panel table-panel">
+  <div class="panel-header"><div><span class="eyebrow">结果中心</span><h2>敏感入口</h2><p>存在性结果用于人工复测，不直接代表漏洞。</p></div><form method="get"><label class="field inline"><span>任务</span><select name="task_id" onchange="this.form.submit()"><option value="">全部任务</option>{% for task in tasks %}<option value="{{ task.id }}" {% if selected_task == task.id %}selected{% endif %}>{{ task.name }}</option>{% endfor %}</select></label></form></div>
+  <div class="filter-bar" data-table-filters><button class="chip active" data-filter="">全部</button><button class="chip" data-filter="P1">P1</button><button class="chip" data-filter="LOGIN">登录</button><button class="chip" data-filter="API_DOCS">接口文档</button><button class="chip" data-filter="MONITORING">管理端点</button><button class="chip" data-filter="SOURCE_CONTROL">源码配置</button></div>
+  {% include "partials/findings_table.html" %}
+</section>
+{% endblock %}

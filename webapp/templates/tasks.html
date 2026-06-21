@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}任务中心｜Web Asset Console{% endblock %}
+{% block page_title %}任务中心{% endblock %}
+{% block page_subtitle %}查看任务状态、参数快照、进度与错误{% endblock %}
+{% block content %}
+<section class="panel table-panel">
+  <div class="panel-header"><div><span class="eyebrow">历史记录</span><h2>扫描任务</h2><p>任务参数在创建时保存，运行中不可修改。</p></div><a class="button primary" href="/#new-scan">新建任务</a></div>
+  <div class="table-wrap"><table class="data-table searchable"><thead><tr><th>任务名称</th><th>状态</th><th>阶段</th><th>进度</th><th>资产</th><th>敏感入口</th><th>开始时间</th><th>完成时间</th></tr></thead><tbody>
+  {% for task in tasks %}<tr><td><a href="/tasks/{{ task.id }}">{{ task.name }}</a><small class="cell-sub">{{ task.id }}</small></td><td><span class="status-badge {{ task.status|lower }}">{{ task.status }}</span></td><td>{{ task.stage }}</td><td>{{ task.progress }}%</td><td>{{ task.counts.assets or 0 }}</td><td>{{ task.counts.findings or 0 }}</td><td>{{ task.started_at or '-' }}</td><td>{{ task.finished_at or '-' }}</td></tr>{% else %}<tr><td colspan="8" class="empty-cell">暂无任务</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}
