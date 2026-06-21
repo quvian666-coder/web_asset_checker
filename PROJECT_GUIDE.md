@@ -3,6 +3,239 @@
 > 更新日期：2026-06-21
 > 使用范围：仅用于自有资产或已获得明确授权的安全测试。
 
+## 0. 开发与部署交接状态（后续窗口必须先读）
+
+### 0.1 当前结论
+
+本地改造已经完成并推送到 GitHub，但 **尚未部署到 Linux 服务器**。后续窗口不要重新设计或重复实现，应从服务器 SSH 授权和真实 MySQL 迁移验证继续。
+
+| 项目 | 当前状态 |
+|---|---|
+| 本地项目 | `D:\桌面\python渗透测试工具\web_asset_checker` |
+| GitHub | `https://github.com/quvian666-coder/web_asset_checker.git` |
+| 默认分支 | `main`，基线提交 `d95086c` |
+| 开发分支 | `codex/harden-platform` |
+| 当前改造提交 | `21dc949`，已推送到 `origin/codex/harden-platform` |
+| PR | GitHub App 创建 PR 返回 403，尚未创建；可访问 `https://github.com/quvian666-coder/web_asset_checker/pull/new/codex/harden-platform` |
+| 自动测试 | 35 项 `unittest` 全部通过 |
+| Python 编译检查 | `python -m compileall -q main.py webapp` 通过 |
+| JavaScript 语法 | `node --check webapp/static/*.js` 通过 |
+| Linux 服务器 | `10.0.0.174`，当前仍运行改造前版本 |
+| Linux 登录 | 用户确认使用 `root` 账号和密码登录；密码不得写入仓库或本文档 |
+| 部署阻塞 | 自动 SSH 测试可到达服务器，但当前部署密钥未获授权，返回 `Permission denied (publickey,password)` |
+
+### 0.2 已实现的改造
+
+#### A. 扫描范围安全闭环
+
+- 新增 `webapp/scope.py`：`ScopePolicy`、`ScopeGuard`、稳定错误码和 URL/IP/DNS 校验。
+- 支持允许域名、手工 URL 精确主机、允许 CIDR、允许端口、允许协议、排除域名/CIDR/端口和授权截止时间。
+- 固定阻止 localhost、`127.0.0.0/8`、`::1`、链路本地、unspecified、multicast、reserved 及云元数据地址。
+- RFC1918 和 IPv6 ULA 默认禁止，只有任务明确配置 `allowed_cidrs` 后才允许。
+- `main.py` 中 `BoundedHttpClient` 在每次请求前解析并校验全部 A/AAAA 地址，HTTP 重定向由平台手动逐跳处理，最多 5 跳，每一跳重新校验。
+- `httpx.AsyncClient` 使用 `follow_redirects=False` 和 `trust_env=False`，避免自动跳转和环境代理绕过。
+- CLI 同样必须生成范围策略，支持 `--allow-cidr`、`--allow-port`、`--exclude-domain`、`--exclude-cidr`、`--exclude-port`。
+- OneForAll 被限制为域名发现模式，固定使用 `--req False --alive False --takeover False`；Web 探测全部由平台受控客户端执行。
+- 页面已增加协议、端口、CIDR、排除项和授权截止时间配置。
+
+注意：当前实现是“请求前 DNS 全量复检”，未实现传输层 DNS pinning，不能夸大为完全消除 DNS TOCTOU。该实现已解决当前项目最主要的字符串域名校验和自动重定向越界问题。
+
+#### B. 生产安全加固
+
+- 新增 `webapp/security.py`：单进程滑动窗口登录限速和统一安全响应头。
+- 默认登录限制为 5 次/5 分钟，封禁 15 分钟；配置项见 `.env.example`。
+- 响应头包括严格 CSP、`X-Content-Type-Options`、`X-Frame-Options`、`Referrer-Policy`、`Permissions-Policy`。
+- 登录、页面、敏感 API 和下载响应使用 `Cache-Control: no-store`；SSE 保留 `no-cache`。
+- `WEBAPP_COOKIE_SECURE`、可信反向代理和弱密码提醒已完善；`admin` 也会被识别为弱密码。
+- `deploy/web-asset-console.service` 已改为 `webasset` 低权限用户，并加入 systemd 沙箱。
+- `deploy/nginx-web-asset-console.conf` 已改为 HTTP 强制跳转 HTTPS、TLS 1.2/1.3、回环代理和 SSE 配置。
+- 新增 `deploy/install-production.sh`，可创建服务用户、数据目录、自签名 IP 证书、安装 Nginx/systemd 配置并启动服务。
+- 可编辑的 `paths.txt` 生产路径改为 `WEBAPP_PATHS_FILE=/var/lib/web-asset-console/paths.txt`，避免服务进程写入只读代码目录。
+
+#### C. 结果复测闭环
+
+- 新增 `webapp/findings.py`：URL 规范化、SHA-256 稳定指纹、复测状态和字段校验。
+- `findings` 继续保存每次任务的原始扫描 observation。
+- 新增 `finding_cases`：跨任务聚合同一入口，保存负责人、状态、备注、标签、证据摘要、首次发现、最近发现和最近复测时间。
+- 新增 `finding_case_events`：保存不可覆盖的人工状态变更历史。
+- 状态包括 `PENDING_RETEST`、`CONFIRMED`、`FALSE_POSITIVE`、`FIXED`、`ACCEPTED_RISK`。
+- `ACCEPTED_RISK` 必须填写备注。
+- 新增 case 查询、更新和历史 API；结果中心增加原生 `<dialog>` 复测界面。
+- `assets.csv` 和 `result.csv` 继续作为任务完成时的不可变原始快照，不会被人工复测状态覆盖。
+
+#### D. 第二优先级功能
+
+- 保留已有任务取消和 SSE，不重写任务系统。
+- 增加复制任务、失败/取消任务重试、复用历史资产仅重跑路径检测。
+- 未实现暂停和断点续跑。
+- 关闭模块时会禁用子参数；关闭路径检测时会同步关闭 OneForAll。
+- 手工 URL 文案已改为：可单独填写；填写主域名后必须属于主域名及配置范围。
+- 规则编辑器增加前后端格式检查和重复路径拒绝。
+- 空状态增加“新建扫描”入口。
+- 移动导航增加 `aria-current`、`aria-expanded`、`aria-controls`、遮罩和 Escape 关闭。
+- 表格增加 `aria-label`，并移除会被严格 CSP 阻止的内联事件和内联样式。
+
+### 0.3 新增或重点修改文件
+
+```text
+webapp/scope.py                    # 范围策略、DNS/IP/重定向校验
+webapp/security.py                 # 登录限速和安全响应头
+webapp/findings.py                 # finding 指纹和复测状态
+webapp/static/findings.js          # 复测弹窗与 API 交互
+tests/test_scope.py                # 范围与重定向测试
+tests/test_security.py             # 登录限速测试
+tests/test_findings.py             # 指纹和复测状态测试
+deploy/install-production.sh       # Linux 生产安装脚本
+deploy/web-asset-console.service   # 非 root systemd 沙箱
+deploy/nginx-web-asset-console.conf # HTTPS 反向代理
+```
+
+核心修改还涉及 `main.py`、`webapp/app.py`、`webapp/runner.py`、`webapp/database.py`、`webapp/config.py`、模板和静态资源。
+
+### 0.4 测试命令与本机路径问题
+
+Codex PowerShell 有时将逻辑工作目录映射为 `D:\claude`，因此后续窗口应优先使用绝对路径和 `git -C`。本地测试使用：
+
+```powershell
+$root = 'D:\桌面\python渗透测试工具\web_asset_checker'
+$env:PYTHONPATH = $root
+& "$root\.venv\Scripts\python.exe" -m unittest discover -s "$root\tests" -v
+& "$root\.venv\Scripts\python.exe" -m compileall -q "$root\main.py" "$root\webapp"
+Get-ChildItem "$root\webapp\static\*.js" | ForEach-Object { node --check $_.FullName }
+git -C $root status -sb
+```
+
+最后一次完整结果：35 项测试通过。测试输出只有 FastAPI/Starlette 关于 TestClient 的弃用警告，不影响结果，当前不应为了该警告引入新依赖。
+
+### 0.5 SSH 登录与专用部署密钥
+
+本机可用的 SSH 客户端是：
+
+```text
+D:\Program Files\Git\usr\bin\ssh.exe
+```
+
+已生成专用部署密钥：
+
+```text
+私钥：C:\Users\LENOVO\.ssh\codex_web_asset
+公钥：C:\Users\LENOVO\.ssh\codex_web_asset.pub
+```
+
+公钥内容（公开信息，可写入服务器）：
+
+```text
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINXFV3+37O8Y8xInKNv4mlmv7/GAUueerftYuFnkyEIH codex-web-asset-deploy
+```
+
+服务器使用 root 密码登录，但自动化工具不能安全输入交互式密码。用户应在本机 PowerShell 手工执行一次以下命令并输入 root 密码，不要把密码发到对话中：
+
+```powershell
+Get-Content "$HOME\.ssh\codex_web_asset.pub" |
+  & 'D:\Program Files\Git\usr\bin\ssh.exe' root@10.0.0.174 `
+  'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys'
+```
+
+授权后验证：
+
+```powershell
+& 'D:\Program Files\Git\usr\bin\ssh.exe' `
+  -i "$HOME\.ssh\codex_web_asset" -o BatchMode=yes root@10.0.0.174 `
+  'id; hostname; systemctl status web-asset-console --no-pager'
+```
+
+### 0.6 下一窗口必须执行的部署顺序
+
+1. 使用上述专用密钥确认可无交互登录 `root@10.0.0.174`。
+2. 备份当前数据库、`/root/web_asset_checker`、`/etc/web-asset-console.env` 和 systemd 服务。
+3. 将 `codex/harden-platform` 克隆或拉取到 `/opt/web_asset_checker`，不要直接覆盖唯一旧副本。
+4. 当前 OneForAll 位于 `/root/OneForAll`，低权限服务和 `ProtectHome=true` 无法访问。必须将 OneForAll 迁移到 `/opt/OneForAll`，重建其虚拟环境，并确认 `webasset` 用户可读/执行。
+5. 在 `/opt/web_asset_checker` 创建新的 `.venv` 并安装 `requirements.txt`。
+6. 保留 `/etc/web-asset-console.env` 中真实 MySQL 密码，但更新应用路径和安全配置；Web 密码必须替换 `admin/admin`，Session 密钥必须重新生成。
+7. 首次启动会执行 `schema_migrations` 版本 1，创建 `finding_cases`、`finding_case_events`，给 `findings` 增加 `case_id` 并回填历史结果。
+8. 运行 `deploy/install-production.sh`，验证 Nginx、systemd、MySQL 迁移和页面。
+9. 使用合法靶场验证范围阻断、显式 RFC1918 CIDR 放行、SSE、取消、CSV 和复测状态。
+10. 验收通过后再合并 `codex/harden-platform` 到 `main`。
+
+建议的服务器命令框架：
+
+```bash
+set -euo pipefail
+
+# 备份
+mkdir -p /root/web-asset-backups
+mysqldump -h 127.0.0.1 -u webasset -p --single-transaction web_asset_checker \
+  > /root/web-asset-backups/web_asset_checker_$(date +%F_%H%M%S).sql
+cp -a /root/web_asset_checker /root/web-asset-backups/web_asset_checker_before_hardening
+cp -a /etc/web-asset-console.env /root/web-asset-backups/web-asset-console.env
+cp -a /etc/systemd/system/web-asset-console.service /root/web-asset-backups/web-asset-console.service
+
+# 拉取应用分支
+apt update
+apt install -y git nginx openssl python3 python3-venv python3-pip
+rm -rf /opt/web_asset_checker.new
+git clone --branch codex/harden-platform --single-branch \
+  https://github.com/quvian666-coder/web_asset_checker.git /opt/web_asset_checker.new
+mv /opt/web_asset_checker.new /opt/web_asset_checker
+python3 -m venv /opt/web_asset_checker/.venv
+/opt/web_asset_checker/.venv/bin/pip install --upgrade pip
+/opt/web_asset_checker/.venv/bin/pip install -r /opt/web_asset_checker/requirements.txt
+
+# 迁移 OneForAll：复制代码后应删除旧 venv 并按它自己的 requirements 重建
+cp -a /root/OneForAll /opt/OneForAll
+rm -rf /opt/OneForAll/.venv
+python3 -m venv /opt/OneForAll/.venv
+/opt/OneForAll/.venv/bin/pip install --upgrade pip
+/opt/OneForAll/.venv/bin/pip install -r /opt/OneForAll/requirements.txt
+chown -R root:root /opt/OneForAll /opt/web_asset_checker
+chmod -R a+rX /opt/OneForAll /opt/web_asset_checker
+```
+
+环境文件至少调整为：
+
+```ini
+WEBAPP_HOST=127.0.0.1
+WEBAPP_PORT=8000
+WEBAPP_USERNAME=admin
+WEBAPP_PASSWORD=<至少20位随机密码，不得使用admin>
+WEBAPP_SESSION_SECRET=<openssl rand -hex 32>
+WEBAPP_COOKIE_SECURE=true
+WEBAPP_DATA_DIR=/var/lib/web-asset-console
+WEBAPP_PATHS_FILE=/var/lib/web-asset-console/paths.txt
+WEBAPP_LOGIN_MAX_ATTEMPTS=5
+WEBAPP_LOGIN_WINDOW_SECONDS=300
+WEBAPP_LOGIN_BLOCK_SECONDS=900
+FORWARDED_ALLOW_IPS=127.0.0.1
+
+ONEFORALL_DIR=/opt/OneForAll
+ONEFORALL_PYTHON=/opt/OneForAll/.venv/bin/python
+```
+
+保留现有 `MYSQL_*` 值。然后执行：
+
+```bash
+cd /opt/web_asset_checker
+PYTHONPATH=/opt/web_asset_checker .venv/bin/python -m unittest discover -s tests -v
+PYTHONPATH=/opt/web_asset_checker .venv/bin/python -m compileall -q main.py webapp
+SERVER_IP=10.0.0.174 bash deploy/install-production.sh
+systemctl status web-asset-console nginx --no-pager
+journalctl -u web-asset-console -n 100 --no-pager
+curl -kI https://127.0.0.1/login
+ss -lntp | grep -E '(:80|:443|:8000|:3306)'
+```
+
+`install-production.sh` 会生成包含 `10.0.0.174` IP SAN 的自签名证书，因此浏览器首次打开 `https://10.0.0.174/` 会显示证书不受信任提示。隔离实验网可手工信任该证书；公网部署必须替换为受信 CA 证书。
+
+### 0.7 部署时必须重点验证的风险
+
+- 本地没有 MySQL 实例，因此数据库迁移尚未在真实 MySQL 上执行；必须先备份再启动。
+- 必须确认当前 OneForAll 在 `--req False` 时仍输出包含 `subdomain` 的 JSON。若其版本行为不同，不得重新开启 OneForAll HTTP 请求，应调整 parser 或 OneForAll 输出参数。
+- systemd 的 `ProtectSystem=strict` 和 `ProtectHome=true` 会阻止访问 `/root/OneForAll`，所以必须完成 `/opt/OneForAll` 迁移。
+- 如果 OneForAll 仍尝试写自身代码目录，应根据日志只为其必要运行目录增加 `ReadWritePaths`，不要改回 root 运行整个 Web 服务。
+- 登录限速当前使用进程内存，适用于当前单进程 Uvicorn；未来多进程部署才需要 Redis/MySQL 共享限速。
+- 当前未实现 MFA、完整 RBAC、PDF、定时任务、通知、Nuclei 自动扫描、暂停和断点续跑，这些不是本轮验收阻塞项。
+- 部署验证通过前不要合并到 `main`，也不要删除 `/root/web_asset_checker` 和数据库备份。
+
 ## 1. 项目定位
 
 Web Asset Console 是一个轻量级 Web 资产发现和敏感路径辅助检测平台，将以下工作串成一个自动任务：
