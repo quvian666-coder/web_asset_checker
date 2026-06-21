@@ -1,14 +1,15 @@
-<div class="table-wrap"><table class="data-table searchable"><thead><tr><th>入口 URL</th><th>功能</th><th>分类</th><th>访问状态</th><th>置信度</th><th>优先级</th><th>标题</th><th>复测建议</th></tr></thead><tbody>
+<div class="table-wrap"><table class="data-table searchable" aria-label="敏感入口复测清单"><thead><tr><th>入口 URL</th><th>功能</th><th>分类</th><th>访问状态</th><th>优先级</th><th>复测状态</th><th>负责人</th><th>发现时间</th><th>操作</th></tr></thead><tbody>
 {% for item in findings %}
-<tr>
+<tr id="case-{{ item.case_id or item.id }}">
   <td class="url-cell"><a href="{{ item.endpoint_url }}" target="_blank" rel="noopener noreferrer">{{ item.endpoint_url }}</a></td>
   <td>{{ item.function }}</td>
   <td><span class="tag blue">{{ item.category }}</span></td>
   <td><span class="status-badge {{ item.access_state|lower }}">{{ item.access_state }}</span></td>
-  <td>{{ item.confidence }}</td>
   <td><span class="priority {{ item.priority|lower }}">{{ item.priority }}</span></td>
-  <td>{{ item.title or '-' }}</td>
-  <td class="wide-cell">{{ item.next_check }}</td>
+  <td><span class="status-badge {{ (item.review_status or 'PENDING_RETEST')|lower }}">{{ item.review_status or 'PENDING_RETEST' }}</span></td>
+  <td>{{ item.assignee or '未分配' }}</td>
+  <td><small class="cell-sub">首次 {{ item.first_seen_at or item.scan_time }}</small><small class="cell-sub">最近 {{ item.last_seen_at or item.scan_time }}</small></td>
+  <td>{% if active_page == 'findings' %}<button class="button ghost small" type="button" data-edit-finding data-case-id="{{ item.case_id or item.id }}">复测</button>{% else %}<a class="text-link" href="/findings#case-{{ item.case_id or item.id }}">查看</a>{% endif %}</td>
 </tr>
-{% else %}<tr><td colspan="8" class="empty-cell">暂无敏感入口结果</td></tr>{% endfor %}
+{% else %}<tr><td colspan="9" class="empty-cell">暂无敏感入口结果，<a href="/#new-scan">新建扫描</a></td></tr>{% endfor %}
 </tbody></table></div>

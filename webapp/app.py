@@ -5,6 +5,7 @@ import hmac
 import json
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -18,7 +19,10 @@ from starlette.middleware.sessions import SessionMiddleware
 from .classifier import PathRule, load_rules, save_rules
 from .config import AppSettings
 from .database import Database
+from .findings import FindingReviewUpdate
 from .runner import TaskManager
+from .scope import ScopeViolation
+from .security import LoginRateLimiter, apply_security_headers
 
 
 settings = AppSettings.from_env()
@@ -30,6 +34,11 @@ database = Database(
     database=settings.mysql_database,
 )
 manager: TaskManager | None = None
+login_limiter = LoginRateLimiter(
+    settings.login_max_attempts,
+    settings.login_window_seconds,
+    settings.login_block_seconds,
+)
 
 
 @asynccontextmanager
@@ -57,6 +66,18 @@ app.add_middleware(
     max_age=8 * 60 * 60,
 )
 
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    content_type = response.headers.get("Content-Type", "").lower()
+    if content_type.startswith("text/event-stream"):
+        return apply_security_headers(response, sensitive=False)
+    return apply_security_headers(
+        response,
+        sensitive=not request.url.path.startswith("/static/"),
+    )
+
 webapp_dir = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=webapp_dir / "templates")
 app.mount("/static", StaticFiles(directory=webapp_dir / "static"), name="static")
@@ -83,6 +104,18 @@ class CheckerRequest(BaseModel):
     soft404_threshold: float = Field(default=0.85, ge=0.5, le=0.99)
 
 
+class ScopeRequest(BaseModel):
+    allowed_cidrs: list[str] = Field(default_factory=list, max_length=100)
+    allowed_ports: list[int] = Field(default_factory=lambda: [80, 443], max_length=100)
+    allowed_schemes: list[Literal["http", "https"]] = Field(
+        default_factory=lambda: ["http", "https"]
+    )
+    excluded_domains: list[str] = Field(default_factory=list, max_length=500)
+    excluded_cidrs: list[str] = Field(default_factory=list, max_length=100)
+    excluded_ports: list[int] = Field(default_factory=list, max_length=100)
+    valid_until: datetime | None = None
+
+
 class TaskRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     domains: list[str] = Field(default_factory=list, max_length=500)
@@ -91,6 +124,7 @@ class TaskRequest(BaseModel):
     max_assets: int = Field(default=500, ge=1, le=5000)
     oneforall: OneForAllRequest = Field(default_factory=OneForAllRequest)
     checker: CheckerRequest = Field(default_factory=CheckerRequest)
+    scope: ScopeRequest = Field(default_factory=ScopeRequest)
 
 
 class RuleRequest(BaseModel):
@@ -99,6 +133,21 @@ class RuleRequest(BaseModel):
     function: str = Field(default="未分类敏感路径", min_length=1, max_length=100)
     keywords: list[str] = Field(default_factory=list, max_length=20)
     enabled: bool = True
+
+
+class FindingReviewRequest(BaseModel):
+    status: Literal[
+        "PENDING_RETEST",
+        "CONFIRMED",
+        "FALSE_POSITIVE",
+        "FIXED",
+        "ACCEPTED_RISK",
+    ]
+    assignee: str = Field(default="", max_length=80)
+    notes: str = Field(default="", max_length=5000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    evidence_summary: str = Field(default="", max_length=5000)
+    mark_retested: bool = False
 
 
 def _logged_in(request: Request) -> bool:
@@ -143,6 +192,11 @@ def login_redirect(request: Request) -> RedirectResponse | None:
     return None
 
 
+def _login_key(request: Request, username: str) -> str:
+    client_ip = request.client.host if request.client else "unknown"
+    return f"{client_ip}:{username.strip().lower()}"
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, next: str = "/"):
     if _logged_in(request):
@@ -162,11 +216,27 @@ async def login_submit(
     csrf_token: Annotated[str, Form()],
     next: Annotated[str, Form()] = "/",
 ):
+    login_key = _login_key(request, username)
+    retry_after = login_limiter.check(login_key)
+    if retry_after:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {
+                "request": request,
+                "csrf_token": _csrf_token(request),
+                "next": next,
+                "error": "登录失败次数过多，请稍后重试",
+            },
+            status_code=429,
+            headers={"Retry-After": str(retry_after)},
+        )
     expected_csrf = request.session.get("csrf_token", "")
     valid_csrf = bool(expected_csrf) and hmac.compare_digest(expected_csrf, csrf_token)
     valid_user = hmac.compare_digest(username, settings.username)
     valid_password = hmac.compare_digest(password, settings.password)
     if not valid_csrf or not valid_user or not valid_password:
+        retry_after = login_limiter.record_failure(login_key)
         return templates.TemplateResponse(
             request,
             "login.html",
@@ -176,8 +246,10 @@ async def login_submit(
                 "next": next,
                 "error": "用户名或密码错误",
             },
-            status_code=400,
+            status_code=429 if retry_after else 400,
+            headers={"Retry-After": str(retry_after)} if retry_after else None,
         )
+    login_limiter.reset(login_key)
     request.session.clear()
     request.session["username"] = settings.username
     request.session["csrf_token"] = secrets.token_urlsafe(24)
@@ -204,7 +276,7 @@ async def dashboard(request: Request):
             stats=database.dashboard_stats(),
             tasks=database.list_tasks(12),
             assets=database.list_assets(limit=8),
-            findings=database.list_findings(limit=8),
+            findings=database.list_finding_cases(limit=8),
         ),
     )
 
@@ -270,7 +342,7 @@ async def findings_page(request: Request, task_id: str | None = None):
             active_page="findings",
             selected_task=task_id or "",
             tasks=database.list_tasks(100),
-            findings=database.list_findings(task_id, 1000),
+            findings=database.list_finding_cases(task_id, 1000),
         ),
     )
 
@@ -296,10 +368,16 @@ async def create_task(payload: TaskRequest, _: None = Depends(require_csrf)):
         raise HTTPException(status_code=400, detail="必须确认已获得目标授权")
     if not payload.oneforall.enabled and not payload.manual_urls:
         raise HTTPException(status_code=400, detail="关闭 OneForAll 时必须提供手工 URL")
+    if payload.oneforall.enabled and payload.domains and not payload.checker.enabled:
+        raise HTTPException(status_code=400, detail="OneForAll 安全模式需要开启 Web 路径检测器")
     if manager is None:
         raise HTTPException(status_code=503, detail="任务管理器尚未启动")
-    config = payload.model_dump()
-    task_id = manager.create(payload.name, config)
+    config = payload.model_dump(mode="json")
+    try:
+        task_id = manager.create(payload.name, config)
+    except (ValueError, ScopeViolation) as exc:
+        detail = f"[{exc.code}] {exc}" if isinstance(exc, ScopeViolation) else str(exc)
+        raise HTTPException(status_code=400, detail=detail) from exc
     return {"id": task_id, "url": f"/tasks/{task_id}"}
 
 
@@ -316,6 +394,39 @@ async def cancel_task(task_id: str, _: None = Depends(require_csrf)):
     if manager is None or not await manager.cancel(task_id):
         raise HTTPException(status_code=409, detail="任务当前无法取消")
     return {"ok": True}
+
+
+@app.post("/api/tasks/{task_id}/clone")
+async def clone_task(task_id: str, _: None = Depends(require_csrf)):
+    if manager is None:
+        raise HTTPException(status_code=503, detail="任务管理器尚未启动")
+    try:
+        new_id = manager.clone(task_id, "full")
+    except (ValueError, ScopeViolation) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"id": new_id, "url": f"/tasks/{new_id}"}
+
+
+@app.post("/api/tasks/{task_id}/retry")
+async def retry_task(task_id: str, _: None = Depends(require_csrf)):
+    if manager is None:
+        raise HTTPException(status_code=503, detail="任务管理器尚未启动")
+    try:
+        new_id = manager.clone(task_id, "retry")
+    except (ValueError, ScopeViolation) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"id": new_id, "url": f"/tasks/{new_id}"}
+
+
+@app.post("/api/tasks/{task_id}/rerun-checker")
+async def rerun_checker(task_id: str, _: None = Depends(require_csrf)):
+    if manager is None:
+        raise HTTPException(status_code=503, detail="任务管理器尚未启动")
+    try:
+        new_id = manager.clone(task_id, "checker_only")
+    except (ValueError, ScopeViolation) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"id": new_id, "url": f"/tasks/{new_id}"}
 
 
 @app.get("/api/tasks/{task_id}/events")
@@ -365,6 +476,38 @@ async def task_assets(task_id: str, _: None = Depends(require_api_auth)):
 @app.get("/api/tasks/{task_id}/findings")
 async def task_findings(task_id: str, _: None = Depends(require_api_auth)):
     return database.list_findings(task_id, 5000)
+
+
+@app.get("/api/finding-cases/{case_id}")
+async def get_finding_case(case_id: int, _: None = Depends(require_api_auth)):
+    item = database.get_finding_case(case_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="复测项不存在")
+    return item
+
+
+@app.patch("/api/finding-cases/{case_id}")
+async def update_finding_case(
+    case_id: int,
+    payload: FindingReviewRequest,
+    request: Request,
+    _: None = Depends(require_csrf),
+):
+    try:
+        update = FindingReviewUpdate.create(**payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    item = database.update_finding_case(case_id, update, request.session["username"])
+    if item is None:
+        raise HTTPException(status_code=404, detail="复测项不存在")
+    return item
+
+
+@app.get("/api/finding-cases/{case_id}/events")
+async def finding_case_events(case_id: int, _: None = Depends(require_api_auth)):
+    if database.get_finding_case(case_id) is None:
+        raise HTTPException(status_code=404, detail="复测项不存在")
+    return database.list_finding_case_events(case_id)
 
 
 @app.get("/api/tasks/{task_id}/download/{kind}")

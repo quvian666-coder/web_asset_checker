@@ -88,6 +88,6 @@ systemctl is-active web-asset-console
 python -m unittest discover -s tests -v
 ```
 
-- [ ] **Step 2: 浏览器使用 `admin/admin` 登录**
+- [ ] **Step 2: 使用 `/etc/web-asset-console.env` 中配置的管理员凭据登录**
 
 - [ ] **Step 3: 打开设置页，确认所有 `paths.txt` 规则均显示且工具状态正常**

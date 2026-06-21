@@ -15,6 +15,15 @@ RestartSec=5
 TimeoutStopSec=20
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/web-asset-console
 UMask=0077
 
 [Install]

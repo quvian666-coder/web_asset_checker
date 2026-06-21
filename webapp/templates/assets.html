@@ -4,7 +4,7 @@
 {% block page_subtitle %}OneForAll 与手工输入整理出的协议、主机和端口资产{% endblock %}
 {% block content %}
 <section class="panel table-panel">
-  <div class="panel-header"><div><span class="eyebrow">资产清单</span><h2>Web 资产</h2><p>同一主机的不同协议和端口视为不同资产。</p></div><form method="get"><label class="field inline"><span>任务</span><select name="task_id" onchange="this.form.submit()"><option value="">全部任务</option>{% for task in tasks %}<option value="{{ task.id }}" {% if selected_task == task.id %}selected{% endif %}>{{ task.name }}</option>{% endfor %}</select></label></form></div>
+  <div class="panel-header"><div><span class="eyebrow">资产清单</span><h2>Web 资产</h2><p>同一主机的不同协议和端口视为不同资产。</p></div><form method="get"><label class="field inline"><span>任务</span><select name="task_id" data-auto-submit><option value="">全部任务</option>{% for task in tasks %}<option value="{{ task.id }}" {% if selected_task == task.id %}selected{% endif %}>{{ task.name }}</option>{% endfor %}</select></label></form></div>
   {% include "partials/assets_table.html" %}
 </section>
 {% endblock %}

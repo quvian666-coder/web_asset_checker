@@ -12,9 +12,11 @@ from difflib import SequenceMatcher
 from enum import StrEnum
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
+
+from webapp.scope import ScopeGuard, ScopePolicy, ScopeViolation
 
 
 DEFAULT_PATHS = (
@@ -254,8 +256,16 @@ def join_root_path(origin: str, path: str) -> str:
 
 
 class BoundedHttpClient:
-    def __init__(self, options: ScanOptions) -> None:
+    def __init__(
+        self,
+        options: ScanOptions,
+        scope_guard: ScopeGuard,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.options = options
+        self.scope_guard = scope_guard
+        self.transport = transport
         self.global_semaphore = asyncio.Semaphore(options.concurrency)
         self.host_semaphores: dict[str, asyncio.Semaphore] = {}
         self.client: httpx.AsyncClient | None = None
@@ -265,6 +275,9 @@ class BoundedHttpClient:
             timeout=httpx.Timeout(self.options.timeout),
             verify=self.options.verify_tls,
             headers={"User-Agent": USER_AGENT, "Accept": "*/*"},
+            follow_redirects=False,
+            trust_env=False,
+            transport=self.transport,
         )
         return self
 
@@ -293,47 +306,15 @@ class BoundedHttpClient:
         last_error = ""
         for attempt in range(self.options.retries + 1):
             try:
-                async with self._host_semaphore(url):
-                    async with self.global_semaphore:
-                        async with self.client.stream(
-                            method,
-                            url,
-                            follow_redirects=follow_redirects,
-                            headers=headers,
-                        ) as response:
-                            body = bytearray()
-                            truncated = False
-
-                            if method.upper() != "HEAD":
-                                async for chunk in response.aiter_bytes():
-                                    remaining = max_body_bytes - len(body)
-                                    if remaining <= 0:
-                                        truncated = True
-                                        break
-                                    body.extend(chunk[:remaining])
-                                    if len(chunk) > remaining:
-                                        truncated = True
-                                        break
-
-                            content_length = response.headers.get("Content-Length", "")
-                            try:
-                                response_length = int(content_length)
-                            except ValueError:
-                                response_length = len(body)
-
-                            if response_length > len(body) and method.upper() != "HEAD":
-                                truncated = truncated or len(body) >= max_body_bytes
-
-                            return ProbeResponse(
-                                requested_url=url,
-                                final_url=str(response.url),
-                                status_code=response.status_code,
-                                headers=dict(response.headers),
-                                body=bytes(body),
-                                response_length=response_length,
-                                redirect_count=len(response.history),
-                                truncated=truncated,
-                            )
+                return await self._fetch_chain(
+                    url,
+                    method=method,
+                    follow_redirects=follow_redirects,
+                    max_body_bytes=max_body_bytes,
+                    headers=headers,
+                )
+            except ScopeViolation:
+                raise
             except httpx.RequestError as exc:
                 last_error = f"{type(exc).__name__}: {str(exc)[:160]}"
                 if attempt < self.options.retries:
@@ -343,6 +324,76 @@ class BoundedHttpClient:
                 break
 
         return ProbeResponse(requested_url=url, error=last_error or "请求失败")
+
+    async def _fetch_chain(
+        self,
+        url: str,
+        *,
+        method: str,
+        follow_redirects: bool,
+        max_body_bytes: int,
+        headers: dict[str, str] | None,
+    ) -> ProbeResponse:
+        if self.client is None:
+            raise RuntimeError("HTTP 客户端尚未启动")
+        requested_url = url
+        current_url = url
+        current_method = method.upper()
+        redirect_count = 0
+
+        while True:
+            target = await self.scope_guard.validate_target(current_url)
+            async with self._host_semaphore(target.url):
+                async with self.global_semaphore:
+                    async with self.client.stream(
+                        current_method,
+                        target.url,
+                        follow_redirects=False,
+                        headers=headers,
+                    ) as response:
+                        location = response.headers.get("Location", "")
+                        is_redirect = response.status_code in {301, 302, 303, 307, 308} and bool(location)
+                        if follow_redirects and is_redirect:
+                            if redirect_count >= 5:
+                                raise ScopeViolation(
+                                    "SCOPE_TOO_MANY_REDIRECTS", "HTTP 重定向超过 5 次"
+                                )
+                            current_url = urljoin(str(response.url), location)
+                            redirect_count += 1
+                            if response.status_code == 303 and current_method != "HEAD":
+                                current_method = "GET"
+                            continue
+
+                        body = bytearray()
+                        truncated = False
+                        if current_method != "HEAD":
+                            async for chunk in response.aiter_bytes():
+                                remaining = max_body_bytes - len(body)
+                                if remaining <= 0:
+                                    truncated = True
+                                    break
+                                body.extend(chunk[:remaining])
+                                if len(chunk) > remaining:
+                                    truncated = True
+                                    break
+
+                        content_length = response.headers.get("Content-Length", "")
+                        try:
+                            response_length = int(content_length)
+                        except ValueError:
+                            response_length = len(body)
+                        if response_length > len(body) and current_method != "HEAD":
+                            truncated = truncated or len(body) >= max_body_bytes
+                        return ProbeResponse(
+                            requested_url=requested_url,
+                            final_url=str(response.url),
+                            status_code=response.status_code,
+                            headers=dict(response.headers),
+                            body=bytes(body),
+                            response_length=response_length,
+                            redirect_count=redirect_count,
+                            truncated=truncated,
+                        )
 
 
 def normalize_page_text(response: ProbeResponse) -> str:
@@ -430,21 +481,28 @@ async def probe_sensitive_path(
     soft404_threshold: float = SOFT404_THRESHOLD,
 ) -> PathFinding:
     url = join_root_path(origin, path)
-
-    if path.lower().endswith(".zip"):
-        head_response = await client.fetch(url, method="HEAD", max_body_bytes=0)
-        if head_response.status_code is not None and (
-            200 <= head_response.status_code < 300 or head_response.status_code in {405, 501}
-        ):
-            response = await client.fetch(
-                url,
-                headers={"Range": "bytes=0-4095"},
-                max_body_bytes=4096,
-            )
+    try:
+        if path.lower().endswith(".zip"):
+            head_response = await client.fetch(url, method="HEAD", max_body_bytes=0)
+            if head_response.status_code is not None and (
+                200 <= head_response.status_code < 300 or head_response.status_code in {405, 501}
+            ):
+                response = await client.fetch(
+                    url,
+                    headers={"Range": "bytes=0-4095"},
+                    max_body_bytes=4096,
+                )
+            else:
+                response = head_response
         else:
-            response = head_response
-    else:
-        response = await client.fetch(url, max_body_bytes=PATH_BODY_LIMIT)
+            response = await client.fetch(url, max_body_bytes=PATH_BODY_LIMIT)
+    except ScopeViolation as exc:
+        return PathFinding(
+            path=path,
+            state=FindingState.ERROR,
+            status_code=None,
+            error=f"[{exc.code}] {exc}",
+        )
 
     state, similarity = classify_path(response, samples, soft404_threshold)
     return PathFinding(
@@ -474,11 +532,15 @@ async def scan_target(
     home: ProbeResponse | None = None
 
     for candidate in candidates:
-        response = await client.fetch(
-            candidate,
-            follow_redirects=True,
-            max_body_bytes=HOME_BODY_LIMIT,
-        )
+        try:
+            response = await client.fetch(
+                candidate,
+                follow_redirects=True,
+                max_body_bytes=HOME_BODY_LIMIT,
+            )
+        except ScopeViolation as exc:
+            candidate_errors.append(f"[{exc.code}] {candidate}: {exc}")
+            continue
         if response.status_code is not None:
             home = response
             break
@@ -498,7 +560,11 @@ async def scan_target(
     result.final_url = home.final_url
 
     origin = origin_from_url(home.final_url or home.requested_url)
-    samples = await build_soft404_baseline(client, origin)
+    try:
+        samples = await build_soft404_baseline(client, origin)
+    except ScopeViolation as exc:
+        result.error = f"[{exc.code}] {exc}"
+        return result
     findings = await asyncio.gather(
         *(
             probe_sensitive_path(client, origin, path, samples, soft404_threshold)
@@ -513,8 +579,9 @@ async def scan_all(
     targets: list[tuple[str, tuple[str, ...]]],
     paths: list[str],
     options: ScanOptions,
+    scope_policy: ScopePolicy,
 ) -> list[AssetResult]:
-    async with BoundedHttpClient(options) as client:
+    async with BoundedHttpClient(options, ScopeGuard(scope_policy)) as client:
         return list(
             await asyncio.gather(
                 *(
@@ -594,6 +661,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-r", "--retries", type=int, default=1, help="失败重试次数，默认 1")
     parser.add_argument("-k", "--insecure", action="store_true", help="忽略 HTTPS 证书验证")
     parser.add_argument("--soft404", type=float, default=0.85, help="软 404 相似度阈值，默认 0.85")
+    parser.add_argument("--allow-cidr", action="append", default=[], help="显式允许的 CIDR，可重复")
+    parser.add_argument("--allow-port", action="append", type=int, default=[], help="额外允许端口，可重复")
+    parser.add_argument("--exclude-domain", action="append", default=[], help="排除域名，可重复")
+    parser.add_argument("--exclude-cidr", action="append", default=[], help="排除 CIDR，可重复")
+    parser.add_argument("--exclude-port", action="append", type=int, default=[], help="排除端口，可重复")
     return parser
 
 
@@ -642,7 +714,34 @@ async def async_main(args: argparse.Namespace) -> int:
 
     print(f"[*] 目标数量：{len(targets)}，敏感路径：{len(paths)}")
     print(f"[*] 并发：{options.concurrency}，超时：{options.timeout:g}s，重试：{options.retries}")
-    results = await scan_all(targets, paths, options)
+    exact_hosts: set[str] = set()
+    allowed_ports = set(args.allow_port)
+    allowed_schemes: set[str] = set()
+    for _, candidates in targets:
+        for candidate in candidates:
+            parsed = urlsplit(candidate)
+            if parsed.hostname:
+                exact_hosts.add(parsed.hostname)
+            allowed_schemes.add(parsed.scheme)
+            allowed_ports.add(parsed.port or (443 if parsed.scheme == "https" else 80))
+    try:
+        scope_policy = ScopePolicy.from_dict(
+            {
+                "allowed_domains": [],
+                "exact_hosts": sorted(exact_hosts),
+                "allowed_cidrs": args.allow_cidr,
+                "allowed_ports": sorted(allowed_ports),
+                "allowed_schemes": sorted(allowed_schemes),
+                "excluded_domains": args.exclude_domain,
+                "excluded_cidrs": args.exclude_cidr,
+                "excluded_ports": args.exclude_port,
+                "valid_until": None,
+            }
+        )
+    except ScopeViolation as exc:
+        print(f"[x] 范围配置无效 [{exc.code}]：{exc}", file=sys.stderr)
+        return 1
+    results = await scan_all(targets, paths, options, scope_policy)
     write_csv(results, output_file)
 
     alive_count = sum(result.alive for result in results)

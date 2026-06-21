@@ -143,13 +143,18 @@ def load_rules(path: Path) -> list[PathRule]:
 
 def save_rules(path: Path, rules: list[PathRule]) -> None:
     lines: list[str] = []
+    seen: set[str] = set()
     for rule in rules:
         if not rule.path.startswith("/") or "://" in rule.path or rule.path.startswith("//"):
             raise ValueError(f"非法站内路径：{rule.path}")
+        normalized_path = "/" + rule.path.lstrip("/")
+        if normalized_path in seen:
+            raise ValueError(f"重复站内路径：{normalized_path}")
+        seen.add(normalized_path)
         category = rule.category.strip().upper() or "CUSTOM"
         function = rule.function.strip() or "自定义敏感路径"
         keywords = ",".join(keyword.strip() for keyword in rule.keywords if keyword.strip())
-        lines.append(f"{rule.path}|{category}|{function}|{keywords}|{int(rule.enabled)}")
+        lines.append(f"{normalized_path}|{category}|{function}|{keywords}|{int(rule.enabled)}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

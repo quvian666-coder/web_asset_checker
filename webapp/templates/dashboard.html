@@ -22,11 +22,26 @@
     </div>
     <div class="target-grid">
       <label class="field"><span>主域名（每行一个）</span><textarea id="domains" rows="5" placeholder="example.com&#10;example.org"></textarea><small>仅填写已明确授权的主域名，不包含协议和路径。</small></label>
-      <label class="field"><span>手工 URL（可选）</span><textarea id="manual-urls" rows="5" placeholder="https://app.example.com&#10;https://api.example.com:8443"></textarea><small>关闭 OneForAll 时必须填写；URL 仍需属于上方授权主域名。</small></label>
+      <label class="field"><span>手工 URL（可选）</span><textarea id="manual-urls" rows="5" placeholder="https://app.example.com&#10;https://api.example.com:8443"></textarea><small>可单独填写；若同时填写主域名，URL 必须属于这些主域名，并满足下方协议、端口和 IP 范围。</small></label>
     </div>
 
+    <fieldset class="module-card scope-card">
+      <legend><span class="module-index">S</span><span>授权范围安全控制</span></legend>
+      <div class="form-grid three">
+        <label class="field"><span>允许端口</span><input id="scope-ports" value="80,443" placeholder="80,443,8443"><small>逗号分隔；OneForAll medium 需加入 8000、8080、8443。</small></label>
+        <label class="field"><span>授权截止时间</span><input id="scope-valid-until" type="datetime-local"><small>留空表示本次配置不设置截止时间。</small></label>
+        <div class="field"><span>允许协议</span><div class="inline-checks"><label><input id="scope-http" type="checkbox" checked> HTTP</label><label><input id="scope-https" type="checkbox" checked> HTTPS</label></div><small>其他协议始终禁止。</small></div>
+      </div>
+      <div class="form-grid three">
+        <label class="field"><span>显式允许 CIDR</span><textarea id="scope-allowed-cidrs" rows="3" placeholder="10.20.0.0/16"></textarea><small>RFC1918 默认禁止；仅在明确授权时填写。</small></label>
+        <label class="field"><span>排除域名</span><textarea id="scope-excluded-domains" rows="3" placeholder="admin.example.com"></textarea><small>每行一个，排除规则优先。</small></label>
+        <label class="field"><span>排除 CIDR / 端口</span><textarea id="scope-excluded-cidrs" rows="2" placeholder="10.20.30.0/24"></textarea><input id="scope-excluded-ports" placeholder="22,3306"><small>CIDR 每行一个；端口逗号分隔。</small></label>
+      </div>
+      <p class="helper-box">始终禁止 localhost、回环、链路本地和云元数据地址。每次 DNS 解析及 HTTP 重定向都会重新校验。</p>
+    </fieldset>
+
     <div class="module-grid">
-      <fieldset class="module-card">
+      <fieldset class="module-card" data-module-card>
         <legend><span class="module-index">A</span><span>OneForAll 资产发现</span><label class="switch"><input id="ofa-enabled" type="checkbox" {% if tool_status.oneforall %}checked{% endif %}><span></span><em>启用</em></label></legend>
         <div class="read-only-path"><span>程序目录</span><code>{{ tool_status.oneforall_dir }}</code></div>
         <div class="read-only-path"><span>Python</span><code>{{ tool_status.oneforall_python }}</code></div>
@@ -36,15 +51,13 @@
         </div>
         <div class="toggle-list">
           <label><input id="ofa-dns" type="checkbox" checked><span>DNS 解析</span><small>建议开启</small></label>
-          <label><input id="ofa-req" type="checkbox" checked><span>HTTP 请求</span><small>提取精确 URL</small></label>
           <label><input id="ofa-brute" type="checkbox"><span>子域爆破</span><small>会显著增加 DNS 请求</small></label>
-          <label><input id="ofa-alive" type="checkbox"><span>仅导出存活</span><small>建议关闭，保留 4xx/5xx</small></label>
-          <label><input id="ofa-takeover" type="checkbox"><span>接管检查</span><small>默认关闭</small></label>
         </div>
+        <p class="helper-box">OneForAll 仅执行域名发现；HTTP 存活和路径请求统一由平台范围校验器执行。</p>
         <details class="advanced"><summary>系统生成参数</summary><dl><div><dt>输出格式</dt><dd>JSON（固定）</dd></div><div><dt>结果目录</dt><dd>任务独立目录（固定）</dd></div></dl></details>
       </fieldset>
 
-      <fieldset class="module-card">
+      <fieldset class="module-card" data-module-card>
         <legend><span class="module-index">B</span><span>敏感路径检测</span><label class="switch"><input id="checker-enabled" type="checkbox" checked><span></span><em>启用</em></label></legend>
         <div class="read-only-path"><span>路径规则</span><code>{{ tool_status.paths_file }}</code></div>
         <div class="form-grid two">

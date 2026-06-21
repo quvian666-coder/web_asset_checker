@@ -4,6 +4,8 @@
   if (!root) return;
   const taskId = root.dataset.taskId;
   const logConsole = document.querySelector("[data-log-console]");
+  const initialProgress = document.querySelector("[data-progress-bar]");
+  if (initialProgress) initialProgress.style.width = `${initialProgress.dataset.progressValue || 0}%`;
   let lastId = Number(logConsole?.lastElementChild?.dataset.eventId || 0);
   let terminalReloadScheduled = false;
 
@@ -68,5 +70,23 @@
       window.WebAssetApp.showToast(error.message, "error");
       event.currentTarget.disabled = false;
     }
+  });
+
+  document.querySelectorAll("[data-task-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const action = button.dataset.taskAction;
+      const labels = { clone: "复制任务", retry: "重试任务", "rerun-checker": "仅重新执行路径检测" };
+      if (!window.confirm(`确定${labels[action]}吗？将创建一个新任务并保留当前记录。`)) return;
+      button.disabled = true;
+      try {
+        const result = await window.WebAssetApp.apiFetch(`/api/tasks/${taskId}/${action}`, {
+          method: "POST",
+        });
+        window.location.href = result.url;
+      } catch (error) {
+        window.WebAssetApp.showToast(error.message, "error");
+        button.disabled = false;
+      }
+    });
   });
 })();

@@ -14,7 +14,14 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=defaults.default_port)
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
-    uvicorn.run("webapp.app:app", host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run(
+        "webapp.app:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        proxy_headers=True,
+        forwarded_allow_ips=defaults.forwarded_allow_ips,
+    )
 
 
 if __name__ == "__main__":

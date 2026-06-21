@@ -7,6 +7,7 @@ import os
 import re
 import signal
 import uuid
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from main import (
 from .classifier import classify_result, load_rules, rule_map
 from .config import AppSettings
 from .database import Database, now_sql
+from .scope import ScopeGuard, ScopePolicy, ScopeViolation
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -55,8 +57,16 @@ def _truthy(value: Any) -> bool:
     return value in {1, True, "1", "true", "True", "yes", "YES"}
 
 
-def parse_oneforall_results(result_dir: Path, roots: list[str]) -> list[dict[str, Any]]:
+def parse_oneforall_results(
+    result_dir: Path,
+    roots: list[str],
+    *,
+    allowed_schemes: set[str] | frozenset[str] | None = None,
+    allowed_ports: set[int] | frozenset[int] | None = None,
+) -> list[dict[str, Any]]:
     assets: dict[str, dict[str, Any]] = {}
+    schemes = set(allowed_schemes or {"http", "https"})
+    ports = set(allowed_ports or {80, 443})
     for json_file in sorted(result_dir.rglob("*.json")):
         try:
             payload = json.loads(json_file.read_text(encoding="utf-8-sig", errors="ignore"))
@@ -75,27 +85,42 @@ def parse_oneforall_results(result_dir: Path, roots: list[str]) -> list[dict[str
             url = str(row.get("url") or "").strip()
             subdomain = str(row.get("subdomain") or urlsplit(url).hostname or "").lower().rstrip(".")
             root = find_root_domain(subdomain, roots)
-            if not root or not url.startswith(("http://", "https://")):
+            if not root:
                 continue
-            request_state = row.get("request")
-            if request_state is not None and not _truthy(request_state):
-                continue
-            normalized = url.rstrip("/")
-            if normalized in assets:
-                continue
-            assets[normalized] = {
-                "root_domain": root,
-                "subdomain": subdomain,
-                "url": normalized,
-                "ip": str(row.get("ip") or ""),
-                "port": str(row.get("port") or urlsplit(url).port or ""),
-                "status_code": str(row.get("status") or ""),
-                "title": str(row.get("title") or ""),
-                "banner": str(row.get("banner") or ""),
-                "server": "",
-                "cdn": str(row.get("cdn") or ""),
-                "source": str(row.get("module") or row.get("source") or "OneForAll"),
-            }
+            urls: list[str] = []
+            if url.startswith(("http://", "https://")):
+                request_state = row.get("request")
+                if request_state is not None and not _truthy(request_state):
+                    continue
+                urls.append(url.rstrip("/"))
+            else:
+                host = f"[{subdomain}]" if ":" in subdomain else subdomain
+                for port in sorted(ports):
+                    for scheme in sorted(schemes):
+                        if port == 80 and scheme != "http":
+                            continue
+                        if port == 443 and scheme != "https":
+                            continue
+                        default_port = 443 if scheme == "https" else 80
+                        suffix = "" if port == default_port else f":{port}"
+                        urls.append(f"{scheme}://{host}{suffix}")
+            for candidate_url in urls:
+                if candidate_url in assets:
+                    continue
+                parsed = urlsplit(candidate_url)
+                assets[candidate_url] = {
+                    "root_domain": root,
+                    "subdomain": subdomain,
+                    "url": candidate_url,
+                    "ip": str(row.get("ip") or ""),
+                    "port": str(parsed.port or (443 if parsed.scheme == "https" else 80)),
+                    "status_code": str(row.get("status") or ""),
+                    "title": str(row.get("title") or ""),
+                    "banner": str(row.get("banner") or ""),
+                    "server": "",
+                    "cdn": str(row.get("cdn") or ""),
+                    "source": str(row.get("module") or row.get("source") or "OneForAll"),
+                }
     return list(assets.values())
 
 
@@ -133,6 +158,29 @@ def manual_assets(urls: list[str], roots: list[str]) -> list[dict[str, Any]]:
             }
         )
     return assets
+
+
+def build_scope_policy(config: dict[str, Any]) -> ScopePolicy:
+    roots = validate_domains(config.get("domains", []))
+    manual_urls = [str(item).strip() for item in config.get("manual_urls", []) if str(item).strip()]
+    exact_hosts: set[str] = set()
+    for raw in manual_urls:
+        value = raw if "://" in raw else f"https://{raw}"
+        parsed = urlsplit(value)
+        if not parsed.hostname:
+            raise ValueError(f"非法 URL：{raw}")
+        if roots and find_root_domain(parsed.hostname, roots) is None:
+            raise ValueError(f"URL 超出主域名范围：{raw}")
+        if not roots:
+            exact_hosts.add(parsed.hostname)
+    requested = dict(config.get("scope", {}))
+    requested.update(
+        {
+            "allowed_domains": roots,
+            "exact_hosts": sorted(exact_hosts),
+        }
+    )
+    return ScopePolicy.from_dict(requested)
 
 
 def write_assets_csv(path: Path, assets: list[dict[str, Any]]) -> None:
@@ -230,10 +278,38 @@ class TaskManager:
         self.worker_semaphore = asyncio.Semaphore(1)
 
     def create(self, name: str, config: dict[str, Any]) -> str:
+        scope_policy = build_scope_policy(config)
+        config["scope_snapshot"] = scope_policy.to_dict()
         task_id = uuid.uuid4().hex
         self.database.create_task(task_id, name, config)
         self.tasks[task_id] = asyncio.create_task(self._run(task_id, config))
         return task_id
+
+    def clone(self, source_task_id: str, mode: str = "full") -> str:
+        source = self.database.get_task(source_task_id)
+        if source is None:
+            raise ValueError("源任务不存在")
+        if mode not in {"full", "retry", "checker_only"}:
+            raise ValueError("不支持的任务复制模式")
+        if mode == "retry" and source["status"] not in {"FAILED", "CANCELLED"}:
+            raise ValueError("只有失败或已取消任务可以重试")
+        config = deepcopy(source["config"])
+        config.pop("scope_snapshot", None)
+        suffix = {"full": "copy", "retry": "retry", "checker_only": "recheck"}[mode]
+        name = f"{source['name']}-{suffix}"[:80]
+        config["name"] = name
+        config["source_task_id"] = source_task_id
+        config["run_mode"] = mode
+        if mode == "checker_only":
+            assets = self.database.list_assets(source_task_id, 100000)
+            urls = [item["url"] for item in assets if item.get("url")]
+            if not urls:
+                raise ValueError("源任务没有可复用的 Web 资产")
+            config["manual_urls"] = urls
+            config["max_assets"] = max(int(config.get("max_assets", 500)), len(urls))
+            config.setdefault("oneforall", {})["enabled"] = False
+            config.setdefault("checker", {})["enabled"] = True
+        return self.create(name, config)
 
     async def cancel(self, task_id: str) -> bool:
         task = self.tasks.get(task_id)
@@ -296,6 +372,8 @@ class TaskManager:
                 if not roots and not manual_urls:
                     raise ValueError("至少需要一个主域名或手工 URL")
                 counts["roots"] = len(roots)
+                scope_policy = ScopePolicy.from_dict(config["scope_snapshot"])
+                scope_guard = ScopeGuard(scope_policy)
                 domains_path = input_dir / "domains.txt"
                 domains_path.write_text("\n".join(roots) + "\n", encoding="utf-8")
                 self._event(task_id, "INFO", f"读取主域名：{len(roots)}")
@@ -306,7 +384,14 @@ class TaskManager:
                 if ofa_config.get("enabled", True) and roots:
                     await self._run_oneforall(task_id, domains_path, ofa_dir, ofa_config)
                     self._progress(task_id, "解析 OneForAll 结果", 30, counts)
-                    assets.extend(parse_oneforall_results(ofa_dir, roots))
+                    assets.extend(
+                        parse_oneforall_results(
+                            ofa_dir,
+                            roots,
+                            allowed_schemes=scope_policy.allowed_schemes,
+                            allowed_ports=scope_policy.allowed_ports,
+                        )
+                    )
                     self._event(task_id, "INFO", f"OneForAll 提取 Web URL：{len(assets)}")
 
                 if manual_urls:
@@ -314,6 +399,22 @@ class TaskManager:
 
                 deduped = {item["url"].rstrip("/"): item for item in assets}
                 assets = list(deduped.values())
+                scoped_assets: list[dict[str, Any]] = []
+                for item in assets:
+                    try:
+                        target = await scope_guard.validate_target(item["url"])
+                    except ScopeViolation as exc:
+                        self._event(
+                            task_id,
+                            "WARN",
+                            f"[{exc.code}] 已阻止越界目标：{item['url']}（{exc}）",
+                        )
+                        continue
+                    item["url"] = target.url.rstrip("/")
+                    item["ip"] = ",".join(target.addresses)
+                    item["port"] = str(target.port)
+                    scoped_assets.append(item)
+                assets = scoped_assets
                 max_assets = int(config.get("max_assets", 500))
                 if len(assets) > max_assets:
                     raise RuntimeError(
@@ -336,10 +437,15 @@ class TaskManager:
                 checker_config = config.get("checker", {})
                 findings: list[dict[str, Any]] = []
                 if checker_config.get("enabled", True):
-                    findings = await self._run_checker(
-                        task_id, assets, checker_config, counts
+                    findings, live_urls = await self._run_checker(
+                        task_id, assets, checker_config, counts, scope_policy
                     )
+                    if ofa_config.get("enabled", True) and roots:
+                        assets = [item for item in assets if item["url"].rstrip("/") in live_urls]
+                        counts["assets"] = len(assets)
+                        counts["subdomains"] = len({item["subdomain"] for item in assets})
                 self.database.replace_findings(task_id, findings)
+                self.database.replace_assets(task_id, assets)
                 write_findings_csv(task_dir / "result.csv", findings)
                 write_assets_csv(task_dir / "assets.csv", self.database.list_assets(task_id, 100000))
 
@@ -404,20 +510,24 @@ class TaskManager:
             "--dns",
             str(bool(config.get("dns", True))),
             "--req",
-            str(bool(config.get("req", True))),
+            "False",
             "--port",
             port,
             "--alive",
-            str(bool(config.get("alive", False))),
+            "False",
             "--fmt",
             "json",
             "--path",
             str(output_dir),
             "--takeover",
-            str(bool(config.get("takeover", False))),
+            "False",
             "run",
         ]
-        self._event(task_id, "INFO", f"启动 OneForAll，端口组：{port}")
+        self._event(
+            task_id,
+            "INFO",
+            f"启动 OneForAll 域名发现，Web 请求由平台范围校验器执行；端口组：{port}",
+        )
         self._progress(task_id, "OneForAll 资产发现", 10)
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -453,7 +563,8 @@ class TaskManager:
         assets: list[dict[str, Any]],
         config: dict[str, Any],
         counts: dict[str, int],
-    ) -> list[dict[str, Any]]:
+        scope_policy: ScopePolicy,
+    ) -> tuple[list[dict[str, Any]], set[str]]:
         rules = load_rules(self.settings.paths_file)
         rules_by_path = rule_map(rules)
         paths = list(rules_by_path)
@@ -476,7 +587,7 @@ class TaskManager:
         asset_by_url = {item["url"].rstrip("/"): item for item in assets}
         results = []
 
-        async with BoundedHttpClient(options) as client:
+        async with BoundedHttpClient(options, ScopeGuard(scope_policy)) as client:
             pending = [
                 asyncio.create_task(
                     scan_target(
@@ -503,6 +614,8 @@ class TaskManager:
 
         for result in results:
             source_asset = asset_by_url.get(result.input_url.rstrip("/"), {})
+            if result.error.startswith("[SCOPE_"):
+                self._event(task_id, "WARN", f"范围校验阻止请求：{result.input_url} {result.error}")
             self.database.update_asset_probe(
                 task_id,
                 result.input_url.rstrip("/"),
@@ -546,7 +659,8 @@ class TaskManager:
                         "scan_time": scan_time,
                     }
                 )
-        return findings
+        live_urls = {result.input_url.rstrip("/") for result in results if result.alive}
+        return findings, live_urls
 
     async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
         if process.returncode is not None:

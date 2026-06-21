@@ -57,6 +57,27 @@ class OneForAllParserTests(unittest.TestCase):
         self.assertEqual(assets[0]["url"], "https://api.example.com")
         self.assertEqual(assets[0]["root_domain"], "example.com")
 
+    def test_parser_builds_candidates_without_oneforall_http_requests(self) -> None:
+        payload = [{"subdomain": "api.example.com", "ip": "93.184.216.34", "source": "dns"}]
+        with tempfile.TemporaryDirectory() as directory:
+            result_file = Path(directory) / "example.com.json"
+            result_file.write_text(json.dumps(payload), encoding="utf-8")
+            assets = parse_oneforall_results(
+                Path(directory),
+                ["example.com"],
+                allowed_schemes={"http", "https"},
+                allowed_ports={80, 443, 8443},
+            )
+        self.assertEqual(
+            {item["url"] for item in assets},
+            {
+                "http://api.example.com",
+                "https://api.example.com",
+                "http://api.example.com:8443",
+                "https://api.example.com:8443",
+            },
+        )
+
 
 class ClassificationTests(unittest.TestCase):
     def test_accessible_keyword_match_is_high_confidence(self) -> None:
@@ -114,6 +135,17 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(rule.function, "指定管理入口")
         self.assertEqual(rule.keywords, ("control panel",))
 
+    def test_duplicate_rules_are_rejected_when_saving(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "重复"):
+                save_rules(
+                    Path(directory) / "paths.txt",
+                    [
+                        PathRule("/admin", "ADMIN", "管理入口"),
+                        PathRule("/admin", "ADMIN", "重复入口"),
+                    ],
+                )
+
 
 class WebAppShapeTests(unittest.TestCase):
     def test_all_templates_compile(self) -> None:
@@ -124,6 +156,10 @@ class WebAppShapeTests(unittest.TestCase):
         paths = {route.path for route in app.routes}
         self.assertIn("/api/tasks", paths)
         self.assertIn("/api/tasks/{task_id}/events", paths)
+        self.assertIn("/api/finding-cases/{case_id}", paths)
+        self.assertIn("/api/tasks/{task_id}/clone", paths)
+        self.assertIn("/api/tasks/{task_id}/retry", paths)
+        self.assertIn("/api/tasks/{task_id}/rerun-checker", paths)
         self.assertIn("/api/rules", paths)
 
     def test_task_request_validates_parameter_ranges(self) -> None:

@@ -26,6 +26,10 @@ class AppSettings:
     mysql_password: str
     mysql_database: str
     cookie_secure: bool
+    forwarded_allow_ips: str
+    login_max_attempts: int
+    login_window_seconds: int
+    login_block_seconds: int
 
     @classmethod
     def from_env(cls) -> "AppSettings":
@@ -46,7 +50,7 @@ class AppSettings:
         return cls(
             project_root=project_root,
             data_dir=data_dir,
-            paths_file=project_root / "paths.txt",
+            paths_file=Path(os.getenv("WEBAPP_PATHS_FILE", project_root / "paths.txt")).expanduser().resolve(),
             oneforall_dir=oneforall_dir,
             oneforall_python=Path(os.getenv("ONEFORALL_PYTHON", default_python)).expanduser(),
             nuclei_binary=os.getenv("NUCLEI_BIN", "nuclei"),
@@ -61,11 +65,15 @@ class AppSettings:
             mysql_password=os.getenv("MYSQL_PASSWORD", ""),
             mysql_database=os.getenv("MYSQL_DATABASE", "web_asset_checker"),
             cookie_secure=os.getenv("WEBAPP_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"},
+            forwarded_allow_ips=os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1"),
+            login_max_attempts=max(1, int(os.getenv("WEBAPP_LOGIN_MAX_ATTEMPTS", "5"))),
+            login_window_seconds=max(1, int(os.getenv("WEBAPP_LOGIN_WINDOW_SECONDS", "300"))),
+            login_block_seconds=max(1, int(os.getenv("WEBAPP_LOGIN_BLOCK_SECONDS", "900"))),
         )
 
     @property
     def uses_default_password(self) -> bool:
-        return self.password == "change-me"
+        return self.password.lower() in {"change-me", "admin", "password", "123456"}
 
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

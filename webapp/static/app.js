@@ -30,8 +30,20 @@
     return contentType.includes("application/json") ? response.json() : response.text();
   }
 
-  document.querySelector("[data-sidebar-toggle]")?.addEventListener("click", () => {
-    document.querySelector("#sidebar")?.classList.toggle("open");
+  const sidebar = document.querySelector("#sidebar");
+  const sidebarToggle = document.querySelector("[data-sidebar-toggle]");
+  const sidebarOverlay = document.querySelector("[data-sidebar-overlay]");
+  function setSidebar(open) {
+    sidebar?.classList.toggle("open", open);
+    sidebarOverlay?.classList.toggle("open", open);
+    sidebarToggle?.setAttribute("aria-expanded", String(open));
+    document.body.classList.toggle("menu-open", open);
+    if (!open) sidebarToggle?.focus();
+  }
+  sidebarToggle?.addEventListener("click", () => setSidebar(!sidebar?.classList.contains("open")));
+  sidebarOverlay?.addEventListener("click", () => setSidebar(false));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && sidebar?.classList.contains("open")) setSidebar(false);
   });
 
   document.querySelector("[data-logout]")?.addEventListener("click", async () => {
@@ -73,6 +85,10 @@
     });
   });
 
+  document.querySelectorAll("[data-auto-submit]").forEach((control) => {
+    control.addEventListener("change", () => control.form?.requestSubmit());
+  });
+
   function lines(id) {
     return document
       .querySelector(id)
@@ -80,6 +96,45 @@
       .map((item) => item.trim())
       .filter((item) => item && !item.startsWith("#"));
   }
+
+  function commaNumbers(id) {
+    return document
+      .querySelector(id)
+      .value.split(/[\s,]+/)
+      .map((item) => Number(item.trim()))
+      .filter((item) => Number.isInteger(item));
+  }
+
+  function syncModule(toggle) {
+    const card = toggle.closest("[data-module-card]");
+    if (!card) return;
+    card.classList.toggle("disabled", !toggle.checked);
+    card.querySelectorAll("input, select, textarea, button").forEach((control) => {
+      if (control !== toggle) control.disabled = !toggle.checked;
+    });
+  }
+
+  const ofaToggle = document.querySelector("#ofa-enabled");
+  const checkerToggle = document.querySelector("#checker-enabled");
+  [ofaToggle, checkerToggle].forEach((toggle) => {
+    if (!toggle) return;
+    syncModule(toggle);
+    toggle.addEventListener("change", () => syncModule(toggle));
+  });
+  checkerToggle?.addEventListener("change", () => {
+    if (!checkerToggle.checked && ofaToggle?.checked) {
+      ofaToggle.checked = false;
+      syncModule(ofaToggle);
+      showToast("已同步关闭 OneForAll；安全模式下资产发现需要平台 HTTP 检测器", "info");
+    }
+  });
+  document.querySelector("#ofa-port")?.addEventListener("change", (event) => {
+    if (event.currentTarget.value !== "medium") return;
+    const input = document.querySelector("#scope-ports");
+    const ports = new Set(commaNumbers("#scope-ports"));
+    [80, 443, 8000, 8080, 8443].forEach((port) => ports.add(port));
+    input.value = [...ports].sort((a, b) => a - b).join(",");
+  });
 
   const scanForm = document.querySelector("#scan-form");
   scanForm?.addEventListener("submit", async (event) => {
@@ -95,10 +150,10 @@
         enabled: document.querySelector("#ofa-enabled").checked,
         brute: document.querySelector("#ofa-brute").checked,
         dns: document.querySelector("#ofa-dns").checked,
-        req: document.querySelector("#ofa-req").checked,
+        req: false,
         port: document.querySelector("#ofa-port").value,
-        alive: document.querySelector("#ofa-alive").checked,
-        takeover: document.querySelector("#ofa-takeover").checked,
+        alive: false,
+        takeover: false,
         timeout: Number(document.querySelector("#ofa-timeout").value),
       },
       checker: {
@@ -110,6 +165,20 @@
         insecure: document.querySelector("#checker-insecure").checked,
         soft404_threshold: Number(document.querySelector("#soft404-threshold").value),
       },
+      scope: {
+        allowed_cidrs: lines("#scope-allowed-cidrs"),
+        allowed_ports: commaNumbers("#scope-ports"),
+        allowed_schemes: [
+          document.querySelector("#scope-http").checked ? "http" : "",
+          document.querySelector("#scope-https").checked ? "https" : "",
+        ].filter(Boolean),
+        excluded_domains: lines("#scope-excluded-domains"),
+        excluded_cidrs: lines("#scope-excluded-cidrs"),
+        excluded_ports: commaNumbers("#scope-excluded-ports"),
+        valid_until: document.querySelector("#scope-valid-until").value
+          ? new Date(document.querySelector("#scope-valid-until").value).toISOString()
+          : null,
+      },
     };
 
     if (!payload.domains.length && !payload.manual_urls.length) {
@@ -118,6 +187,10 @@
     }
     if (!payload.authorization_confirmed) {
       showToast("必须确认已获得目标测试授权", "error");
+      return;
+    }
+    if (!payload.scope.allowed_ports.length || !payload.scope.allowed_schemes.length) {
+      showToast("授权范围必须至少包含一个协议和一个端口", "error");
       return;
     }
 
@@ -169,6 +242,24 @@
         .map((item) => item.trim())
         .filter(Boolean),
     }));
+    const seenPaths = new Set();
+    for (const [index, rule] of rules.entries()) {
+      const input = rulesTable.querySelectorAll("[data-rule-path]")[index];
+      input.classList.remove("invalid");
+      if (!rule.path.startsWith("/") || rule.path.startsWith("//") || rule.path.includes("://")) {
+        input.classList.add("invalid");
+        showToast(`第 ${index + 1} 条规则不是合法站内路径`, "error");
+        input.focus();
+        return;
+      }
+      if (seenPaths.has(rule.path)) {
+        input.classList.add("invalid");
+        showToast(`发现重复规则：${rule.path}`, "error");
+        input.focus();
+        return;
+      }
+      seenPaths.add(rule.path);
+    }
     button.disabled = true;
     try {
       await apiFetch("/api/rules", { method: "PUT", body: JSON.stringify(rules) });
