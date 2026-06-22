@@ -106,7 +106,7 @@ class Database:
                 root_domain VARCHAR(253) NOT NULL,
                 subdomain VARCHAR(253) NOT NULL,
                 url TEXT NOT NULL,
-                ip VARCHAR(255) NOT NULL DEFAULT '',
+                ip TEXT NOT NULL,
                 port VARCHAR(20) NOT NULL DEFAULT '',
                 status_code VARCHAR(20) NOT NULL DEFAULT '',
                 title VARCHAR(500) NOT NULL DEFAULT '',
@@ -170,73 +170,79 @@ class Database:
     def _apply_migrations(self, cursor: pymysql.cursors.DictCursor) -> None:
         cursor.execute("SELECT version FROM schema_migrations")
         applied = {int(row["version"]) for row in cursor.fetchall()}
-        if 1 in applied:
-            return
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS finding_cases (
-                id BIGINT PRIMARY KEY AUTO_INCREMENT,
-                fingerprint CHAR(64) NOT NULL UNIQUE,
-                root_domain VARCHAR(253) NOT NULL,
-                subdomain VARCHAR(253) NOT NULL,
-                endpoint_url TEXT NOT NULL,
-                `function` VARCHAR(200) NOT NULL,
-                category VARCHAR(80) NOT NULL,
-                review_status VARCHAR(24) NOT NULL DEFAULT 'PENDING_RETEST',
-                assignee VARCHAR(80) NOT NULL DEFAULT '',
-                notes TEXT NOT NULL,
-                tags_json LONGTEXT NOT NULL,
-                evidence_summary TEXT NOT NULL,
-                first_seen_at DATETIME NOT NULL,
-                last_seen_at DATETIME NOT NULL,
-                last_retested_at DATETIME NULL,
-                updated_at DATETIME NOT NULL,
-                INDEX idx_case_status(review_status),
-                INDEX idx_case_assignee(assignee),
-                INDEX idx_case_last_seen(last_seen_at)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """
-        )
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS count FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA=%s AND TABLE_NAME='findings' AND COLUMN_NAME='case_id'
-            """,
-            (self.database,),
-        )
-        if int(cursor.fetchone()["count"]) == 0:
-            cursor.execute("ALTER TABLE findings ADD COLUMN case_id BIGINT NULL AFTER task_id")
-            cursor.execute("ALTER TABLE findings ADD INDEX idx_findings_case(case_id)")
+        if 1 not in applied:
             cursor.execute(
                 """
-                ALTER TABLE findings ADD CONSTRAINT fk_findings_case
-                FOREIGN KEY(case_id) REFERENCES finding_cases(id) ON DELETE SET NULL
+                CREATE TABLE IF NOT EXISTS finding_cases (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    fingerprint CHAR(64) NOT NULL UNIQUE,
+                    root_domain VARCHAR(253) NOT NULL,
+                    subdomain VARCHAR(253) NOT NULL,
+                    endpoint_url TEXT NOT NULL,
+                    `function` VARCHAR(200) NOT NULL,
+                    category VARCHAR(80) NOT NULL,
+                    review_status VARCHAR(24) NOT NULL DEFAULT 'PENDING_RETEST',
+                    assignee VARCHAR(80) NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL,
+                    tags_json LONGTEXT NOT NULL,
+                    evidence_summary TEXT NOT NULL,
+                    first_seen_at DATETIME NOT NULL,
+                    last_seen_at DATETIME NOT NULL,
+                    last_retested_at DATETIME NULL,
+                    updated_at DATETIME NOT NULL,
+                    INDEX idx_case_status(review_status),
+                    INDEX idx_case_assignee(assignee),
+                    INDEX idx_case_last_seen(last_seen_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS finding_case_events (
-                id BIGINT PRIMARY KEY AUTO_INCREMENT,
-                case_id BIGINT NOT NULL,
-                actor VARCHAR(80) NOT NULL,
-                old_status VARCHAR(24) NOT NULL,
-                new_status VARCHAR(24) NOT NULL,
-                assignee VARCHAR(80) NOT NULL DEFAULT '',
-                notes TEXT NOT NULL,
-                tags_json LONGTEXT NOT NULL,
-                evidence_summary TEXT NOT NULL,
-                created_at DATETIME NOT NULL,
-                INDEX idx_case_events(case_id, id),
-                CONSTRAINT fk_case_events_case FOREIGN KEY(case_id)
-                    REFERENCES finding_cases(id) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """
-        )
-        self._backfill_finding_cases(cursor)
-        cursor.execute(
-            "INSERT INTO schema_migrations(version,applied_at) VALUES(1,%s)",
-            (now_sql(),),
-        )
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS count FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA=%s AND TABLE_NAME='findings' AND COLUMN_NAME='case_id'
+                """,
+                (self.database,),
+            )
+            if int(cursor.fetchone()["count"]) == 0:
+                cursor.execute("ALTER TABLE findings ADD COLUMN case_id BIGINT NULL AFTER task_id")
+                cursor.execute("ALTER TABLE findings ADD INDEX idx_findings_case(case_id)")
+                cursor.execute(
+                    """
+                    ALTER TABLE findings ADD CONSTRAINT fk_findings_case
+                    FOREIGN KEY(case_id) REFERENCES finding_cases(id) ON DELETE SET NULL
+                    """
+                )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS finding_case_events (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    case_id BIGINT NOT NULL,
+                    actor VARCHAR(80) NOT NULL,
+                    old_status VARCHAR(24) NOT NULL,
+                    new_status VARCHAR(24) NOT NULL,
+                    assignee VARCHAR(80) NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL,
+                    tags_json LONGTEXT NOT NULL,
+                    evidence_summary TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    INDEX idx_case_events(case_id, id),
+                    CONSTRAINT fk_case_events_case FOREIGN KEY(case_id)
+                        REFERENCES finding_cases(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            self._backfill_finding_cases(cursor)
+            cursor.execute(
+                "INSERT INTO schema_migrations(version,applied_at) VALUES(%s,%s)",
+                (1, now_sql()),
+            )
+
+        if 2 not in applied:
+            cursor.execute("ALTER TABLE assets MODIFY COLUMN ip TEXT NOT NULL")
+            cursor.execute(
+                "INSERT INTO schema_migrations(version,applied_at) VALUES(%s,%s)",
+                (2, now_sql()),
+            )
 
     @staticmethod
     def _seen_at(value: Any) -> str:

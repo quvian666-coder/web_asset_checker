@@ -24,10 +24,12 @@
 | Linux 登录 | 用户确认使用 `root` 账号和密码登录；密码不得写入仓库或本文档 |
 | 部署状态 | 已通过 Paramiko 使用用户明确授权的 root 密码完成；密码未写入文件、仓库或日志 |
 | 当前访问地址 | `http://10.0.0.174:8000` |
-| 数据库迁移 | `schema_migrations=[1]`，`findings.case_id`、`finding_cases`、`finding_case_events` 已创建 |
+| 数据库迁移 | `schema_migrations=[1,2]`；迁移 2 将 `assets.ip` 扩展为 `TEXT` |
 | 服务器备份 | `/root/web-asset-backups/20260621133810` |
 
 2026-06-22 热修复：新建扫描页面的空端口字段曾被前端 `Number("")` 转换为端口 `0`，触发 `[SCOPE_PORT_INVALID]`。现已在数值转换前过滤空项，并原地部署；无需修改已有范围配置或服务器配置。
+
+2026-06-22 数据库热修复：DNS 安全复检会保存同一主机解析到的全部 IPv4/IPv6，`autodiscover.ppdai.com` 和 `autodiscover.xinye.com` 的 IP 列表长度达到 277，超过原 `assets.ip VARCHAR(255)` 并触发 MySQL 1406。迁移 2 将该列改为 `TEXT NOT NULL`，完整保留 DNS 证据，不做截断。
 
 ### 0.2 已实现的改造
 

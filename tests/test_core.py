@@ -175,6 +175,39 @@ class WebAppShapeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Database(host="127.0.0.1", port=3306, user="u", password="p", database="bad-name")
 
+    def test_migration_two_expands_asset_ip_storage(self) -> None:
+        class MigrationCursor:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, object]] = []
+
+            def execute(self, statement: str, params: object = None) -> None:
+                self.calls.append((" ".join(statement.split()), params))
+
+            def fetchall(self) -> list[dict[str, int]]:
+                return [{"version": 1}]
+
+        database = Database(
+            host="127.0.0.1",
+            port=3306,
+            user="u",
+            password="p",
+            database="test_db",
+        )
+        cursor = MigrationCursor()
+
+        database._apply_migrations(cursor)  # type: ignore[arg-type]
+
+        statements = [statement for statement, _ in cursor.calls]
+        self.assertIn("ALTER TABLE assets MODIFY COLUMN ip TEXT NOT NULL", statements)
+        self.assertTrue(
+            any(
+                statement.startswith("INSERT INTO schema_migrations")
+                and params is not None
+                and params[0] == 2
+                for statement, params in cursor.calls
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
