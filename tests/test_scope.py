@@ -7,7 +7,14 @@ from unittest.mock import patch
 
 import httpx
 
-from main import BoundedHttpClient, ScanOptions
+from main import (
+    BoundedHttpClient,
+    FindingState,
+    ProbeResponse,
+    ScanOptions,
+    probe_sensitive_path,
+    scan_target,
+)
 from webapp.scope import ScopeGuard, ScopePolicy, ScopeViolation
 
 
@@ -144,6 +151,97 @@ class RedirectScopeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.final_url, "https://example.com/final")
         self.assertEqual(response.redirect_count, 1)
+
+
+class SensitivePathClassificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scan_skips_paths_when_soft404_baseline_is_unavailable(self) -> None:
+        class FakeClient:
+            async def fetch(self, url: str, **_: object) -> ProbeResponse:
+                if "web-asset-check-" in url:
+                    return ProbeResponse(requested_url=url, error="timeout")
+                if url.endswith("/.git/config"):
+                    return ProbeResponse(
+                        requested_url=url,
+                        final_url=url,
+                        status_code=203,
+                        body=b"<title>security alert</title>",
+                        response_length=29,
+                    )
+                return ProbeResponse(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    body=b"home",
+                    response_length=4,
+                )
+
+        result = await scan_target(
+            FakeClient(),  # type: ignore[arg-type]
+            "https://example.com",
+            ("https://example.com",),
+            ["/.git/config"],
+        )
+
+        self.assertEqual(result.findings, [])
+        self.assertIn("软 404 基线不可用", result.error)
+
+    async def test_git_config_requires_git_content_signature(self) -> None:
+        class FakeClient:
+            async def fetch(self, url: str, **_: object) -> ProbeResponse:
+                return ProbeResponse(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=203,
+                    headers={"Content-Type": "text/html; charset=UTF-8"},
+                    body=b"<html><title>security alert</title></html>",
+                    response_length=41,
+                )
+
+        baseline = ProbeResponse(
+            requested_url="https://example.com/missing",
+            final_url="https://example.com/missing",
+            status_code=404,
+            body=b"not found",
+            response_length=9,
+        )
+        finding = await probe_sensitive_path(
+            FakeClient(),  # type: ignore[arg-type]
+            "https://example.com",
+            "/.git/config",
+            [baseline],
+        )
+
+        self.assertEqual(finding.state, FindingState.ERROR)
+        self.assertIn("Git 配置特征", finding.error)
+
+    async def test_git_config_accepts_real_git_content_signature(self) -> None:
+        class FakeClient:
+            async def fetch(self, url: str, **_: object) -> ProbeResponse:
+                body = b"[core]\n\trepositoryformatversion = 0\n\tbare = false\n"
+                return ProbeResponse(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    headers={"Content-Type": "text/plain"},
+                    body=body,
+                    response_length=len(body),
+                )
+
+        baseline = ProbeResponse(
+            requested_url="https://example.com/missing",
+            final_url="https://example.com/missing",
+            status_code=404,
+            body=b"not found",
+            response_length=9,
+        )
+        finding = await probe_sensitive_path(
+            FakeClient(),  # type: ignore[arg-type]
+            "https://example.com",
+            "/.git/config",
+            [baseline],
+        )
+
+        self.assertEqual(finding.state, FindingState.CONFIRMED)
 
 
 if __name__ == "__main__":

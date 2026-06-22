@@ -473,6 +473,11 @@ def classify_path(
     return FindingState.ERROR, similarity
 
 
+def has_git_config_signature(body: bytes) -> bool:
+    lowered = body.lower()
+    return b"[core]" in lowered and b"repositoryformatversion" in lowered
+
+
 async def probe_sensitive_path(
     client: BoundedHttpClient,
     origin: str,
@@ -505,6 +510,14 @@ async def probe_sensitive_path(
         )
 
     state, similarity = classify_path(response, samples, soft404_threshold)
+    error = response.error
+    if (
+        state == FindingState.CONFIRMED
+        and path.lower().rstrip("/") == "/.git/config"
+        and not has_git_config_signature(response.body)
+    ):
+        state = FindingState.ERROR
+        error = "响应缺少 Git 配置特征，已忽略疑似网关或统一错误页"
     return PathFinding(
         path=path,
         state=state,
@@ -516,7 +529,7 @@ async def probe_sensitive_path(
         server=header_value(response.headers, "Server"),
         x_powered_by=header_value(response.headers, "X-Powered-By"),
         content_type=header_value(response.headers, "Content-Type"),
-        error=response.error,
+        error=error,
     )
 
 
@@ -564,6 +577,9 @@ async def scan_target(
         samples = await build_soft404_baseline(client, origin)
     except ScopeViolation as exc:
         result.error = f"[{exc.code}] {exc}"
+        return result
+    if not samples:
+        result.error = "软 404 基线不可用，已跳过敏感路径检测"
         return result
     findings = await asyncio.gather(
         *(

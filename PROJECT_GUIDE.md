@@ -31,6 +31,8 @@
 
 2026-06-22 数据库热修复：DNS 安全复检会保存同一主机解析到的全部 IPv4/IPv6，`autodiscover.ppdai.com` 和 `autodiscover.xinye.com` 的 IP 列表长度达到 277，超过原 `assets.ip VARCHAR(255)` 并触发 MySQL 1406。迁移 2 将该列改为 `TEXT NOT NULL`，完整保留 DNS 证据，不做截断。
 
+2026-06-22 误报热修复：一次扫描中 217 条 `.git/config` 均为 HTTP 203、标题“安全告警”、长度 1131 的统一 HTML 页面，并非 Git 配置。根因是随机软 404 基线全部超时时仍继续把任意 2xx 判为可访问。现已在基线完全不可用时跳过该主机的敏感路径判定，并要求 `.git/config` 响应同时包含 `[core]` 和 `repositoryformatversion` 特征。历史结果保留，需使用“重跑路径检测”生成修正后的结果。
+
 ### 0.2 已实现的改造
 
 #### A. 扫描范围安全闭环
