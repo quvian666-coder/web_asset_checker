@@ -101,7 +101,9 @@
     return document
       .querySelector(id)
       .value.split(/[\s,]+/)
-      .map((item) => Number(item.trim()))
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => Number(item))
       .filter((item) => Number.isInteger(item));
   }
 

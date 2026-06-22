@@ -27,6 +27,8 @@
 | 数据库迁移 | `schema_migrations=[1]`，`findings.case_id`、`finding_cases`、`finding_case_events` 已创建 |
 | 服务器备份 | `/root/web-asset-backups/20260621133810` |
 
+2026-06-22 热修复：新建扫描页面的空端口字段曾被前端 `Number("")` 转换为端口 `0`，触发 `[SCOPE_PORT_INVALID]`。现已在数值转换前过滤空项，并原地部署；无需修改已有范围配置或服务器配置。
+
 ### 0.2 已实现的改造
 
 #### A. 扫描范围安全闭环
