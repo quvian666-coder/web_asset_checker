@@ -1,13 +1,13 @@
 # Web Asset Console 项目配置与部署说明
 
-> 更新日期：2026-06-21
+> 更新日期：2026-06-22
 > 使用范围：仅用于自有资产或已获得明确授权的安全测试。
 
 ## 0. 开发与部署交接状态（后续窗口必须先读）
 
 ### 0.1 当前结论
 
-本地改造已经完成并推送到 GitHub，但 **尚未部署到 Linux 服务器**。后续窗口不要重新设计或重复实现，应从服务器 SSH 授权和真实 MySQL 迁移验证继续。
+本地改造已经完成并推送到 GitHub，并于 **2026-06-22 原地增量部署到 Linux 服务器**。部署按用户要求保留现有 `/root/web_asset_checker`、root systemd、HTTP 8000、环境变量、数据库、虚拟环境、任务数据和路径规则；没有应用 `/opt`、Nginx、HTTPS、低权限用户或密码轮换模板。
 
 | 项目 | 当前状态 |
 |---|---|
@@ -20,9 +20,12 @@
 | 自动测试 | 35 项 `unittest` 全部通过 |
 | Python 编译检查 | `python -m compileall -q main.py webapp` 通过 |
 | JavaScript 语法 | `node --check webapp/static/*.js` 通过 |
-| Linux 服务器 | `10.0.0.174`，当前仍运行改造前版本 |
+| Linux 服务器 | `10.0.0.174`，已运行 `febface` 对应代码 |
 | Linux 登录 | 用户确认使用 `root` 账号和密码登录；密码不得写入仓库或本文档 |
-| 部署阻塞 | 自动 SSH 测试可到达服务器，但当前部署密钥未获授权，返回 `Permission denied (publickey,password)` |
+| 部署状态 | 已通过 Paramiko 使用用户明确授权的 root 密码完成；密码未写入文件、仓库或日志 |
+| 当前访问地址 | `http://10.0.0.174:8000` |
+| 数据库迁移 | `schema_migrations=[1]`，`findings.case_id`、`finding_cases`、`finding_case_events` 已创建 |
+| 服务器备份 | `/root/web-asset-backups/20260621133810` |
 
 ### 0.2 已实现的改造
 
@@ -144,7 +147,23 @@ Get-Content "$HOME\.ssh\codex_web_asset.pub" |
   'id; hostname; systemctl status web-asset-console --no-pager'
 ```
 
-### 0.6 下一窗口必须执行的部署顺序
+### 0.6 已完成的实际部署记录与可选生产迁移
+
+实际部署已完成，不需要后续窗口重复执行：
+
+- 上传并解压 Git 提交 `febface` 的精确归档。
+- 在 `/root/web_asset_checker.release-febface` 使用现有 `.venv` 运行 35 项测试，全部通过。
+- 备份 MySQL、应用代码、任务数据、环境文件和 systemd 到 `/root/web-asset-backups/20260621133810`。
+- 数据库备份使用 `mysqldump --no-tablespaces --single-transaction`，文件已验证包含 `tasks` 建表语句。
+- 停止现有服务，原地覆盖代码；明确保留 `.venv`、`data`、`paths.txt`、`urls.txt`、`result.csv`、`/etc/web-asset-console.env` 和 systemd unit。
+- 执行加法型数据库迁移版本 1，然后启动原有服务。
+- 服务器再次运行 35 项测试，全部通过。
+- 登录态验收确认首页包含 `scope-ports`、`scope-allowed-cidrs`，结果页包含 `data-review-dialog`，设置页包含 `data-rules-table`。
+- 配置文件、systemd unit 和 `paths.txt` 与部署前备份逐字节/哈希一致。
+- Windows 访问 `http://10.0.0.174:8000/login` 返回 HTTP 200，并包含 CSP、`no-store` 等新安全响应头。
+- 当前服务 PID 会随重启变化，仍使用 root 和 `0.0.0.0:8000`；这是用户要求保留现有配置的结果，不是生产模板遗漏。
+
+以下步骤只在用户以后明确要求从当前实验环境迁移到 `/opt`、Nginx HTTPS 和 `webasset` 低权限服务时执行，当前不要执行：
 
 1. 使用上述专用密钥确认可无交互登录 `root@10.0.0.174`。
 2. 备份当前数据库、`/root/web_asset_checker`、`/etc/web-asset-console.env` 和 systemd 服务。
@@ -226,15 +245,15 @@ ss -lntp | grep -E '(:80|:443|:8000|:3306)'
 
 `install-production.sh` 会生成包含 `10.0.0.174` IP SAN 的自签名证书，因此浏览器首次打开 `https://10.0.0.174/` 会显示证书不受信任提示。隔离实验网可手工信任该证书；公网部署必须替换为受信 CA 证书。
 
-### 0.7 部署时必须重点验证的风险
+### 0.7 后续生产化迁移时必须重点验证的风险
 
-- 本地没有 MySQL 实例，因此数据库迁移尚未在真实 MySQL 上执行；必须先备份再启动。
+- 数据库迁移已在服务器 MySQL 8.0.46 上执行成功；以后新增迁移仍必须先备份。
 - 必须确认当前 OneForAll 在 `--req False` 时仍输出包含 `subdomain` 的 JSON。若其版本行为不同，不得重新开启 OneForAll HTTP 请求，应调整 parser 或 OneForAll 输出参数。
 - systemd 的 `ProtectSystem=strict` 和 `ProtectHome=true` 会阻止访问 `/root/OneForAll`，所以必须完成 `/opt/OneForAll` 迁移。
 - 如果 OneForAll 仍尝试写自身代码目录，应根据日志只为其必要运行目录增加 `ReadWritePaths`，不要改回 root 运行整个 Web 服务。
 - 登录限速当前使用进程内存，适用于当前单进程 Uvicorn；未来多进程部署才需要 Redis/MySQL 共享限速。
 - 当前未实现 MFA、完整 RBAC、PDF、定时任务、通知、Nuclei 自动扫描、暂停和断点续跑，这些不是本轮验收阻塞项。
-- 部署验证通过前不要合并到 `main`，也不要删除 `/root/web_asset_checker` 和数据库备份。
+- 当前功能部署已验证，但开发分支尚未合并到 `main`；不要删除 `/root/web_asset_checker` 和数据库备份。
 
 ## 1. 项目定位
 
