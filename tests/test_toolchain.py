@@ -172,6 +172,7 @@ class NucleiAdapterTests(unittest.TestCase):
         self.assertIn("-disable-unsigned-templates", command)
         self.assertIn("-disable-redirects", command)
         self.assertIn("-restrict-local-network-access", command)
+        self.assertIn("-omit-template", command)
         self.assertEqual(command[command.index("-rate-limit") + 1], "2")
         self.assertEqual(command[command.index("-concurrency") + 1], "2")
         self.assertEqual(

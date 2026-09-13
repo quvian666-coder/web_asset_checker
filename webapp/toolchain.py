@@ -249,6 +249,7 @@ def build_nuclei_command(
             "-jsonl-export",
             str(output_file),
             "-omit-raw",
+            "-omit-template",
             "-disable-update-check",
             "-response-size-read",
             "1048576",

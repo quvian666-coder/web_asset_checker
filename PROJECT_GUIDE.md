@@ -97,6 +97,7 @@
 - Nuclei 默认关闭，只对路径检测确认存活的资产执行。它按单个资产的标题、Server、URL 和已发现入口选择模板，不匹配指纹时安全跳过。
 - `nuclei-allowlist.txt` 当前只允许官方 Git 配置、Jenkins、Grafana 和 Spring Boot 检测模板，前端不能提交模板路径。
 - Nuclei 固定使用 HTTP 模板、官方签名校验、禁重定向、禁 OAST、禁本地/私网访问、1 MiB 响应读取上限、低速率和小并发。
+- Nuclei JSONL 只作为进程间临时文件；转换为最小 finding 后立即删除，避免模板 extractor 将凭据片段长期落盘。
 - 如果 Nuclei 与平台路径检测命中同一 Endpoint URL，会合并证据、取更高复测优先级和置信度，避免重复 finding。
 - 路径检测得到的状态码、标题和 Server 会同步回内存资产，避免任务末尾用旧数据覆盖数据库，也为 Nuclei 指纹路由提供证据。
 - 旧任务配置没有 `discovery_preset` 时按 `legacy` 执行，保证任务重试/复制的向后兼容；“仅重跑路径检测”会关闭全部发现器和 Nuclei。

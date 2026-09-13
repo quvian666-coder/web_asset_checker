@@ -963,13 +963,16 @@ class TaskManager:
                 rate_limit=int(config.get("rate_limit", 2)),
                 concurrency=int(config.get("concurrency", 2)),
             )
-            await self._run_external_tool(
-                task_id,
-                command,
-                timeout=float(config.get("timeout", 900)),
-                label=f"Nuclei[{template.stem}]",
-            )
-            findings.extend(parse_nuclei_jsonl(output_path, scoped_assets))
+            try:
+                await self._run_external_tool(
+                    task_id,
+                    command,
+                    timeout=float(config.get("timeout", 900)),
+                    label=f"Nuclei[{template.stem}]",
+                )
+                findings.extend(parse_nuclei_jsonl(output_path, scoped_assets))
+            finally:
+                output_path.unlink(missing_ok=True)
             progress = 88 + int(index / len(targets_by_template) * 8)
             self._progress(
                 task_id,
