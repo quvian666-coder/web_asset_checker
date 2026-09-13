@@ -1,6 +1,6 @@
 # Web Asset Console 项目配置与部署说明
 
-> 更新日期：2026-06-22
+> 更新日期：2026-09-13
 > 使用范围：仅用于自有资产或已获得明确授权的安全测试。
 
 ## 0. 开发与部署交接状态（后续窗口必须先读）
@@ -12,20 +12,22 @@
 | 项目 | 当前状态 |
 |---|---|
 | 本地项目 | `D:\桌面\python渗透测试工具\web_asset_checker` |
-| GitHub | `https://github.com/quvian666-coder/web_asset_checker.git` |
-| 默认分支 | `main`，基线提交 `d95086c` |
-| 开发分支 | `codex/harden-platform` |
-| 当前改造提交 | `21dc949`，已推送到 `origin/codex/harden-platform` |
-| PR | GitHub App 创建 PR 返回 403，尚未创建；可访问 `https://github.com/quvian666-coder/web_asset_checker/pull/new/codex/harden-platform` |
-| 自动测试 | 35 项 `unittest` 全部通过 |
+| GitHub | `https://github.com/quvian666-coder/web_asset_checker.git`，Public |
+| 默认分支 | `main`，已合并至 `8b2a33d` |
+| 开发分支 | `codex/harden-platform`，保留作为回滚参照 |
+| 当前改造提交 | `8b2a33d`，已推送到 `origin/main` |
+| 合并状态 | 2026-09-13 已通过 fast-forward 合并到 `main`，无需 PR |
+| 自动测试 | Linux 39 项 `unittest` 全部通过 |
 | Python 编译检查 | `python -m compileall -q main.py webapp` 通过 |
 | JavaScript 语法 | `node --check webapp/static/*.js` 通过 |
-| Linux 服务器 | `10.0.0.174`，已运行 `febface` 对应代码 |
+| Linux 服务器 | `10.0.0.174`，已运行 `8b2a33d` 对应代码 |
 | Linux 登录 | 用户确认使用 `root` 账号和密码登录；密码不得写入仓库或本文档 |
 | 部署状态 | 已通过 Paramiko 使用用户明确授权的 root 密码完成；密码未写入文件、仓库或日志 |
 | 当前访问地址 | `http://10.0.0.174:8000` |
 | 数据库迁移 | `schema_migrations=[1,2]`；迁移 2 将 `assets.ip` 扩展为 `TEXT` |
 | 服务器备份 | `/root/web-asset-backups/20260621133810` |
+
+2026-09-13 仓库状态更新：GitHub 仓库已公开，`codex/harden-platform` 已快进合并到默认分支 `main`。本次仅更新交接状态文档，没有修改扫描逻辑或 Linux 服务。
 
 2026-06-22 热修复：新建扫描页面的空端口字段曾被前端 `Number("")` 转换为端口 `0`，触发 `[SCOPE_PORT_INVALID]`。现已在数值转换前过滤空项，并原地部署；无需修改已有范围配置或服务器配置。
 
