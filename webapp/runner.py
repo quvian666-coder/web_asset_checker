@@ -844,6 +844,9 @@ class TaskManager:
                 title=result.title,
                 server=result.server,
             )
+            source_asset["status_code"] = str(result.status_code or "")
+            source_asset["title"] = result.title
+            source_asset["server"] = result.server
             if not result.alive:
                 continue
             origin = origin_from_url(result.final_url or result.normalized_url)
