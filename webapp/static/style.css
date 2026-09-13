@@ -93,6 +93,7 @@ code { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; font
 .panel-header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 .tool-badge, .status-badge, .priority, .tag { display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; white-space: nowrap; font-size: 10px; font-weight: 800; letter-spacing: .01em; }
 .tool-badge { padding: 6px 10px; }.tool-badge.success { color: #15803d; background: #dcfce7; }.tool-badge.danger { color: #b91c1c; background: #fee2e2; }
+.tool-badge-list { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 
 .scan-form { padding: 18px 20px 22px; }
 .scan-top-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; margin-bottom: 14px; }
@@ -108,7 +109,15 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--primary)
 .module-grid { margin-top: 16px; }
 .module-card { min-width: 0; margin: 0; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-alt); }
 .scope-card { margin-top: 16px; }
+.preset-card { margin-top: 16px; background: #f8fbff; }
 .module-card.disabled { opacity: .58; }
+.subtool { padding: 12px 0; border-top: 1px solid var(--border); }
+.subtool:first-of-type { padding-top: 0; border-top: 0; }
+.subtool.disabled [data-subtool-controls] { opacity: .55; }
+.subtool-title { display: flex; align-items: center; gap: 12px; }
+.subtool-title > div { min-width: 0; }
+.subtool-title strong, .subtool-title small { display: block; }
+.subtool-title small { margin-top: 2px; color: var(--muted); font-size: 10px; }
 .inline-checks { min-height: 39px; display: flex; gap: 18px; align-items: center; }
 .inline-checks label { display: inline-flex; gap: 7px; align-items: center; font-size: 13px; }
 .module-card legend { width: 100%; padding: 0 0 12px; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 800; }
@@ -150,6 +159,7 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--primary)
 .log-console { height: 322px; padding: 12px; overflow: auto; background: #0f172a; color: #cbd5e1; font: 12px/1.65 "Cascadia Code", Consolas, monospace; }.log-line { display: grid; grid-template-columns: 64px 76px 1fr; gap: 8px; }.log-line time { color: #64748b; }.log-line b { color: #60a5fa; }.log-line.warn b { color: #fbbf24; }.log-line.error b { color: #f87171; }.log-line.success b { color: #4ade80; }.log-line span { overflow-wrap: anywhere; }
 
 .settings-grid { margin-bottom: 18px; }.settings-list { margin: 0; }.settings-list div { padding: 11px 18px; display: grid; grid-template-columns: 150px 1fr; gap: 12px; border-bottom: 1px solid #eef2f7; }.settings-list dt { color: var(--muted); }.settings-list dd { margin: 0; overflow-wrap: anywhere; }.helper-box { margin: 14px 18px 18px; padding: 11px; color: #475569; background: #f1f5f9; border-radius: 8px; font-size: 11px; }.check-list { margin: 0; padding: 12px 20px 18px 40px; }.check-list li { margin: 9px 0; }.rules-panel { overflow: hidden; }.rule-table { min-width: 1100px; }
+.helper-box.compact { margin: 0; }
 
 .toast-region { position: fixed; z-index: 1000; right: 20px; bottom: 20px; display: grid; gap: 8px; }.toast { width: min(360px, calc(100vw - 40px)); padding: 12px 14px; border-radius: 9px; color: white; background: #334155; box-shadow: 0 12px 30px rgba(15,23,42,.2); }.toast.success { background: #15803d; }.toast.error { background: #b91c1c; }
 
