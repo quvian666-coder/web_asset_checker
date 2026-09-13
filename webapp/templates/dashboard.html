@@ -13,7 +13,11 @@
 <section id="new-scan" class="panel scan-panel">
   <div class="panel-header">
     <div><span class="eyebrow">新建任务</span><h2>完整资产发现与敏感入口检测</h2><p>所有参数都会作为任务快照保存，运行中不可修改。</p></div>
-    <span class="tool-badge {% if tool_status.oneforall %}success{% else %}danger{% endif %}">OneForAll {% if tool_status.oneforall %}可用{% else %}未配置{% endif %}</span>
+    <div class="tool-badge-list">
+      <span class="tool-badge {% if tool_status.oneforall %}success{% else %}danger{% endif %}">OneForAll {% if tool_status.oneforall %}可用{% else %}未配置{% endif %}</span>
+      <span class="tool-badge {% if tool_status.subfinder and tool_status.dnsx %}success{% else %}danger{% endif %}">PD 发现链 {% if tool_status.subfinder and tool_status.dnsx %}可用{% else %}未就绪{% endif %}</span>
+      <span class="tool-badge {% if tool_status.nuclei_ready %}success{% else %}danger{% endif %}">Nuclei {% if tool_status.nuclei_ready %}可用{% else %}未就绪{% endif %}</span>
+    </div>
   </div>
   <form id="scan-form" class="scan-form">
     <div class="scan-top-grid">
@@ -40,9 +44,22 @@
       <p class="helper-box">始终禁止 localhost、回环、链路本地和云元数据地址。每次 DNS 解析及 HTTP 重定向都会重新校验。</p>
     </fieldset>
 
+    <fieldset class="module-card preset-card">
+      <legend><span class="module-index">P</span><span>资产发现方案</span></legend>
+      <div class="form-grid two">
+        <label class="field"><span>执行模式</span><select id="discovery-preset">
+          <option value="quick" {% if not (tool_status.subfinder and tool_status.dnsx) %}disabled{% endif %}>快速：Subfinder → dnsx</option>
+          <option value="comprehensive" selected {% if not (tool_status.oneforall and tool_status.subfinder and tool_status.dnsx) %}disabled{% endif %}>综合（推荐）：多源合并 + dnsx</option>
+          <option value="legacy" {% if not tool_status.oneforall %}disabled{% endif %}>兼容：OneForAll + MassDNS</option>
+          <option value="custom">自定义：独立选择工具</option>
+        </select><small id="discovery-preset-help">Subfinder 与 OneForAll 并行补充来源，合并去重后交给 dnsx 验证。</small></label>
+        <div class="field"><span>方案原则</span><p class="helper-box compact">发现工具只产出候选主机；所有 HTTP 请求仍必须通过平台授权范围复检。</p></div>
+      </div>
+    </fieldset>
+
     <div class="module-grid">
       <fieldset class="module-card" data-module-card>
-        <legend><span class="module-index">A</span><span>OneForAll 资产发现</span><label class="switch"><input id="ofa-enabled" type="checkbox" {% if tool_status.oneforall %}checked{% endif %}><span></span><em>启用</em></label></legend>
+        <legend><span class="module-index">A</span><span>OneForAll 资产发现</span><label class="switch"><input id="ofa-enabled" type="checkbox" {% if tool_status.oneforall %}checked{% endif %} {% if not tool_status.oneforall %}disabled{% endif %}><span></span><em>启用</em></label></legend>
         <div class="read-only-path"><span>程序目录</span><code>{{ tool_status.oneforall_dir }}</code></div>
         <div class="read-only-path"><span>Python</span><code>{{ tool_status.oneforall_python }}</code></div>
         <div class="form-grid two">
@@ -57,8 +74,27 @@
         <details class="advanced"><summary>系统生成参数</summary><dl><div><dt>输出格式</dt><dd>JSON（固定）</dd></div><div><dt>结果目录</dt><dd>任务独立目录（固定）</dd></div></dl></details>
       </fieldset>
 
+      <fieldset class="module-card">
+        <legend><span class="module-index">B</span><span>ProjectDiscovery 发现链</span></legend>
+        <section class="subtool" data-subtool-card>
+          <div class="subtool-title"><div><strong>Subfinder</strong><small>被动子域发现，补充 OneForAll 数据源</small></div><label class="switch"><input id="subfinder-enabled" type="checkbox" {% if tool_status.subfinder %}checked{% endif %} {% if not tool_status.subfinder %}disabled{% endif %}><span></span><em>启用</em></label></div>
+          <div class="form-grid two" data-subtool-controls>
+            <label class="field"><span>速率上限</span><div class="input-suffix"><input id="subfinder-rate" type="number" value="5" min="1" max="50"><span>/秒</span></div></label>
+            <label class="field"><span>运行超时</span><div class="input-suffix"><input id="subfinder-timeout" type="number" value="600" min="60" max="3600"><span>秒</span></div></label>
+          </div>
+        </section>
+        <section class="subtool" data-subtool-card>
+          <div class="subtool-title"><div><strong>dnsx</strong><small>解析验证 A/AAAA/CNAME，过滤无效候选</small></div><label class="switch"><input id="dnsx-enabled" type="checkbox" {% if tool_status.dnsx %}checked{% endif %} {% if not tool_status.dnsx %}disabled{% endif %}><span></span><em>启用</em></label></div>
+          <div class="form-grid two" data-subtool-controls>
+            <label class="field"><span>速率上限</span><div class="input-suffix"><input id="dnsx-rate" type="number" value="50" min="1" max="500"><span>/秒</span></div></label>
+            <label class="field"><span>运行超时</span><div class="input-suffix"><input id="dnsx-timeout" type="number" value="600" min="60" max="3600"><span>秒</span></div></label>
+          </div>
+        </section>
+        <p class="helper-box">dnsx 只做 DNS 验证；解析结果仍会由平台重新解析并检查 IP 授权范围。</p>
+      </fieldset>
+
       <fieldset class="module-card" data-module-card>
-        <legend><span class="module-index">B</span><span>敏感路径检测</span><label class="switch"><input id="checker-enabled" type="checkbox" checked><span></span><em>启用</em></label></legend>
+        <legend><span class="module-index">C</span><span>敏感路径检测</span><label class="switch"><input id="checker-enabled" type="checkbox" checked><span></span><em>启用</em></label></legend>
         <div class="read-only-path"><span>路径规则</span><code>{{ tool_status.paths_file }}</code></div>
         <div class="form-grid two">
           <label class="field"><span>全局并发</span><input id="checker-concurrency" type="number" value="10" min="1" max="100"></label>
@@ -71,10 +107,21 @@
         <div class="tag-section"><span>功能分类</span><div class="tag-cloud"><b class="tag blue">LOGIN</b><b class="tag violet">ADMIN</b><b class="tag cyan">API_DOCS</b><b class="tag orange">MONITORING</b><b class="tag red">SOURCE_CONTROL</b><b class="tag amber">BACKUP_FILE</b></div></div>
         <div class="tag-section"><span>访问状态</span><div class="tag-cloud"><b class="tag green">ACCESSIBLE</b><b class="tag blue">AUTH_REQUIRED</b><b class="tag orange">FORBIDDEN</b><b class="tag violet">REDIRECTED</b><b class="tag gray">SOFT_404</b></div></div>
       </fieldset>
+
+      <fieldset class="module-card" data-module-card>
+        <legend><span class="module-index">D</span><span>Nuclei 指纹定向验证</span><label class="switch"><input id="nuclei-enabled" type="checkbox" {% if not tool_status.nuclei_ready %}disabled{% endif %}><span></span><em>启用</em></label></legend>
+        <div class="read-only-path"><span>模板策略</span><code>服务器白名单 + 官方签名校验</code></div>
+        <div class="form-grid two">
+          <label class="field"><span>速率上限</span><div class="input-suffix"><input id="nuclei-rate" type="number" value="2" min="1" max="20"><span>/秒</span></div></label>
+          <label class="field"><span>模板并发</span><input id="nuclei-concurrency" type="number" value="2" min="1" max="5"></label>
+          <label class="field"><span>单模板超时</span><div class="input-suffix"><input id="nuclei-timeout" type="number" value="900" min="60" max="3600"><span>秒</span></div></label>
+        </div>
+        <p class="helper-box">默认关闭。仅根据当前资产指纹运行对应白名单模板；强制禁用跳转、OAST、未签名模板和本地/私网访问。</p>
+      </fieldset>
     </div>
 
     <div class="pipeline" aria-label="执行流程">
-      <div><span>1</span><b>读取目标</b></div><i></i><div><span>2</span><b>资产发现</b></div><i></i><div><span>3</span><b>URL 去重</b></div><i></i><div><span>4</span><b>路径探测</b></div><i></i><div><span>5</span><b>功能识别</b></div><i></i><div><span>6</span><b>生成报告</b></div>
+      <div><span>1</span><b>读取目标</b></div><i></i><div><span>2</span><b>多源发现</b></div><i></i><div><span>3</span><b>DNS 验证</b></div><i></i><div><span>4</span><b>范围复检</b></div><i></i><div><span>5</span><b>路径探测</b></div><i></i><div><span>6</span><b>Nuclei</b></div><i></i><div><span>7</span><b>生成报告</b></div>
     </div>
 
     <div class="scan-actions">

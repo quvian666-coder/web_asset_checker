@@ -117,17 +117,85 @@
   }
 
   const ofaToggle = document.querySelector("#ofa-enabled");
+  const subfinderToggle = document.querySelector("#subfinder-enabled");
+  const dnsxToggle = document.querySelector("#dnsx-enabled");
   const checkerToggle = document.querySelector("#checker-enabled");
-  [ofaToggle, checkerToggle].forEach((toggle) => {
+  const nucleiToggle = document.querySelector("#nuclei-enabled");
+  const presetSelect = document.querySelector("#discovery-preset");
+  [ofaToggle, checkerToggle, nucleiToggle].forEach((toggle) => {
     if (!toggle) return;
     syncModule(toggle);
     toggle.addEventListener("change", () => syncModule(toggle));
   });
+
+  function syncSubtool(toggle) {
+    const section = toggle?.closest("[data-subtool-card]");
+    if (!section) return;
+    section.classList.toggle("disabled", !toggle.checked);
+    section.querySelectorAll("[data-subtool-controls] input").forEach((control) => {
+      control.disabled = !toggle.checked;
+    });
+  }
+  [subfinderToggle, dnsxToggle].forEach((toggle) => {
+    if (!toggle) return;
+    syncSubtool(toggle);
+    toggle.addEventListener("change", () => syncSubtool(toggle));
+  });
+
+  const presetDescriptions = {
+    quick: "Subfinder 快速收集后由 dnsx 验证，适合日常小范围扫描。",
+    comprehensive: "Subfinder 与 OneForAll 补充来源，合并去重后交给 dnsx 验证。",
+    legacy: "保留原有 OneForAll + 内置 MassDNS 流程，适合兼容和对照。",
+    custom: "按下方开关独立组合工具；服务器仍会执行统一范围复检。",
+  };
+  let applyingPreset = false;
+
+  function setTool(toggle, enabled) {
+    if (!toggle || toggle.disabled) return;
+    toggle.checked = enabled;
+    if (toggle === ofaToggle) syncModule(toggle);
+    else syncSubtool(toggle);
+  }
+
+  function applyPreset(value) {
+    applyingPreset = true;
+    if (value === "quick") {
+      setTool(ofaToggle, false);
+      setTool(subfinderToggle, true);
+      setTool(dnsxToggle, true);
+    } else if (value === "comprehensive") {
+      setTool(ofaToggle, true);
+      setTool(subfinderToggle, true);
+      setTool(dnsxToggle, true);
+    } else if (value === "legacy") {
+      setTool(ofaToggle, true);
+      setTool(subfinderToggle, false);
+      setTool(dnsxToggle, false);
+    }
+    document.querySelector("#discovery-preset-help").textContent = presetDescriptions[value];
+    applyingPreset = false;
+  }
+
+  if (presetSelect?.selectedOptions[0]?.disabled) {
+    const fallback = [...presetSelect.options].find((option) => !option.disabled);
+    if (fallback) presetSelect.value = fallback.value;
+  }
+  applyPreset(presetSelect?.value || "custom");
+  presetSelect?.addEventListener("change", () => applyPreset(presetSelect.value));
+  [ofaToggle, subfinderToggle, dnsxToggle].forEach((toggle) => {
+    toggle?.addEventListener("change", () => {
+      if (!applyingPreset && presetSelect) {
+        presetSelect.value = "custom";
+        applyPreset("custom");
+      }
+    });
+  });
+
   checkerToggle?.addEventListener("change", () => {
-    if (!checkerToggle.checked && ofaToggle?.checked) {
-      ofaToggle.checked = false;
-      syncModule(ofaToggle);
-      showToast("已同步关闭 OneForAll；安全模式下资产发现需要平台 HTTP 检测器", "info");
+    if (!checkerToggle.checked && nucleiToggle?.checked) {
+      nucleiToggle.checked = false;
+      syncModule(nucleiToggle);
+      showToast("已同步关闭 Nuclei；它只对平台确认存活的 Web 资产执行", "info");
     }
   });
   document.querySelector("#ofa-port")?.addEventListener("change", (event) => {
@@ -148,6 +216,7 @@
       manual_urls: lines("#manual-urls"),
       authorization_confirmed: document.querySelector("#authorization-confirmed").checked,
       max_assets: Number(document.querySelector("#max-assets").value),
+      discovery_preset: document.querySelector("#discovery-preset").value,
       oneforall: {
         enabled: document.querySelector("#ofa-enabled").checked,
         brute: document.querySelector("#ofa-brute").checked,
@@ -158,6 +227,16 @@
         takeover: false,
         timeout: Number(document.querySelector("#ofa-timeout").value),
       },
+      subfinder: {
+        enabled: document.querySelector("#subfinder-enabled").checked,
+        rate_limit: Number(document.querySelector("#subfinder-rate").value),
+        timeout: Number(document.querySelector("#subfinder-timeout").value),
+      },
+      dnsx: {
+        enabled: document.querySelector("#dnsx-enabled").checked,
+        rate_limit: Number(document.querySelector("#dnsx-rate").value),
+        timeout: Number(document.querySelector("#dnsx-timeout").value),
+      },
       checker: {
         enabled: document.querySelector("#checker-enabled").checked,
         concurrency: Number(document.querySelector("#checker-concurrency").value),
@@ -166,6 +245,12 @@
         retries: Number(document.querySelector("#checker-retries").value),
         insecure: document.querySelector("#checker-insecure").checked,
         soft404_threshold: Number(document.querySelector("#soft404-threshold").value),
+      },
+      nuclei: {
+        enabled: document.querySelector("#nuclei-enabled").checked,
+        rate_limit: Number(document.querySelector("#nuclei-rate").value),
+        concurrency: Number(document.querySelector("#nuclei-concurrency").value),
+        timeout: Number(document.querySelector("#nuclei-timeout").value),
       },
       scope: {
         allowed_cidrs: lines("#scope-allowed-cidrs"),
@@ -193,6 +278,20 @@
     }
     if (!payload.scope.allowed_ports.length || !payload.scope.allowed_schemes.length) {
       showToast("授权范围必须至少包含一个协议和一个端口", "error");
+      return;
+    }
+    if (
+      payload.domains.length &&
+      !payload.manual_urls.length &&
+      !payload.oneforall.enabled &&
+      !payload.subfinder.enabled &&
+      !payload.dnsx.enabled
+    ) {
+      showToast("当前发现方案未启用任何工具", "error");
+      return;
+    }
+    if (payload.nuclei.enabled && !payload.checker.enabled) {
+      showToast("启用 Nuclei 时必须同时开启路径检测", "error");
       return;
     }
 

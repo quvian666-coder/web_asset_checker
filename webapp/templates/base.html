@@ -40,7 +40,9 @@
       <div class="sidebar-status">
         <span class="eyebrow">系统状态</span>
         <div class="status-row"><span class="status-dot {% if tool_status.oneforall %}online{% else %}offline{% endif %}"></span>OneForAll</div>
-        <div class="status-row"><span class="status-dot {% if tool_status.nuclei %}online{% else %}muted{% endif %}"></span>Nuclei（预留）</div>
+        <div class="status-row"><span class="status-dot {% if tool_status.subfinder %}online{% else %}offline{% endif %}"></span>Subfinder</div>
+        <div class="status-row"><span class="status-dot {% if tool_status.dnsx %}online{% else %}offline{% endif %}"></span>dnsx</div>
+        <div class="status-row"><span class="status-dot {% if tool_status.nuclei_ready %}online{% else %}muted{% endif %}"></span>Nuclei</div>
         <a href="/settings" class="text-link">查看工具配置</a>
       </div>
     </aside>

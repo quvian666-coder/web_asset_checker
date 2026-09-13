@@ -23,6 +23,7 @@ from .findings import FindingReviewUpdate
 from .runner import TaskManager
 from .scope import ScopeViolation
 from .security import LoginRateLimiter, apply_security_headers
+from .toolchain import resolve_discovery_config
 
 
 settings = AppSettings.from_env()
@@ -94,6 +95,25 @@ class OneForAllRequest(BaseModel):
     timeout: int = Field(default=1800, ge=60, le=7200)
 
 
+class SubfinderRequest(BaseModel):
+    enabled: bool = True
+    rate_limit: int = Field(default=5, ge=1, le=50)
+    timeout: int = Field(default=600, ge=60, le=3600)
+
+
+class DnsxRequest(BaseModel):
+    enabled: bool = True
+    rate_limit: int = Field(default=50, ge=1, le=500)
+    timeout: int = Field(default=600, ge=60, le=3600)
+
+
+class NucleiRequest(BaseModel):
+    enabled: bool = False
+    rate_limit: int = Field(default=2, ge=1, le=20)
+    concurrency: int = Field(default=2, ge=1, le=5)
+    timeout: int = Field(default=900, ge=60, le=3600)
+
+
 class CheckerRequest(BaseModel):
     enabled: bool = True
     concurrency: int = Field(default=10, ge=1, le=100)
@@ -122,8 +142,14 @@ class TaskRequest(BaseModel):
     manual_urls: list[str] = Field(default_factory=list, max_length=1000)
     authorization_confirmed: bool
     max_assets: int = Field(default=500, ge=1, le=5000)
+    discovery_preset: Literal["quick", "comprehensive", "legacy", "custom"] = (
+        "comprehensive"
+    )
     oneforall: OneForAllRequest = Field(default_factory=OneForAllRequest)
+    subfinder: SubfinderRequest = Field(default_factory=SubfinderRequest)
+    dnsx: DnsxRequest = Field(default_factory=DnsxRequest)
     checker: CheckerRequest = Field(default_factory=CheckerRequest)
+    nuclei: NucleiRequest = Field(default_factory=NucleiRequest)
     scope: ScopeRequest = Field(default_factory=ScopeRequest)
 
 
@@ -366,10 +392,34 @@ async def settings_page(request: Request):
 async def create_task(payload: TaskRequest, _: None = Depends(require_csrf)):
     if not payload.authorization_confirmed:
         raise HTTPException(status_code=400, detail="必须确认已获得目标授权")
-    if not payload.oneforall.enabled and not payload.manual_urls:
-        raise HTTPException(status_code=400, detail="关闭 OneForAll 时必须提供手工 URL")
-    if payload.oneforall.enabled and payload.domains and not payload.checker.enabled:
-        raise HTTPException(status_code=400, detail="OneForAll 安全模式需要开启 Web 路径检测器")
+    discovery = resolve_discovery_config(
+        payload.discovery_preset,
+        payload.oneforall.model_dump(),
+        payload.subfinder.model_dump(),
+        payload.dnsx.model_dump(),
+    )
+    if payload.domains and not any(
+        (
+            discovery.oneforall_enabled,
+            discovery.subfinder_enabled,
+            discovery.dnsx_enabled,
+        )
+    ) and not payload.manual_urls:
+        raise HTTPException(status_code=400, detail="当前发现模式未启用任何工具")
+    tool_status = settings.tool_status()
+    missing: list[str] = []
+    if payload.domains and discovery.oneforall_enabled and not tool_status["oneforall"]:
+        missing.append("OneForAll")
+    if payload.domains and discovery.subfinder_enabled and not tool_status["subfinder"]:
+        missing.append("Subfinder")
+    if payload.domains and discovery.dnsx_enabled and not tool_status["dnsx"]:
+        missing.append("dnsx")
+    if payload.nuclei.enabled and not tool_status["nuclei_ready"]:
+        missing.append("Nuclei")
+    if missing:
+        raise HTTPException(status_code=400, detail=f"服务器工具未就绪：{', '.join(missing)}")
+    if payload.nuclei.enabled and not payload.checker.enabled:
+        raise HTTPException(status_code=400, detail="Nuclei 仅对平台已确认存活的 Web 资产执行，请开启路径检测")
     if manager is None:
         raise HTTPException(status_code=503, detail="任务管理器尚未启动")
     config = payload.model_dump(mode="json")

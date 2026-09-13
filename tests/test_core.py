@@ -170,6 +170,20 @@ class WebAppShapeTests(unittest.TestCase):
         )
         self.assertEqual(request.checker.concurrency, 10)
         self.assertEqual(request.oneforall.port, "small")
+        self.assertEqual(request.discovery_preset, "comprehensive")
+        self.assertEqual(request.nuclei.rate_limit, 2)
+
+    def test_dashboard_exposes_toolchain_controls(self) -> None:
+        source = (settings.project_root / "webapp/templates/dashboard.html").read_text(
+            encoding="utf-8"
+        )
+        for control in (
+            "discovery-preset",
+            "subfinder-enabled",
+            "dnsx-enabled",
+            "nuclei-enabled",
+        ):
+            self.assertIn(f'id="{control}"', source)
 
     def test_mysql_database_name_is_restricted(self) -> None:
         with self.assertRaises(ValueError):

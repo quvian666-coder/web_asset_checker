@@ -26,6 +26,18 @@ from .classifier import classify_result, load_rules, rule_map
 from .config import AppSettings
 from .database import Database, now_sql
 from .scope import ScopeGuard, ScopePolicy, ScopeViolation
+from .toolchain import (
+    build_nuclei_command,
+    discovery_rows_to_assets,
+    load_nuclei_routes,
+    merge_assets,
+    merge_findings,
+    parse_dnsx_jsonl,
+    parse_nuclei_jsonl,
+    parse_subfinder_jsonl,
+    resolve_discovery_config,
+    select_nuclei_templates,
+)
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -307,8 +319,12 @@ class TaskManager:
                 raise ValueError("源任务没有可复用的 Web 资产")
             config["manual_urls"] = urls
             config["max_assets"] = max(int(config.get("max_assets", 500)), len(urls))
+            config["discovery_preset"] = "custom"
             config.setdefault("oneforall", {})["enabled"] = False
+            config.setdefault("subfinder", {})["enabled"] = False
+            config.setdefault("dnsx", {})["enabled"] = False
             config.setdefault("checker", {})["enabled"] = True
+            config.setdefault("nuclei", {})["enabled"] = False
         return self.create(name, config)
 
     async def cancel(self, task_id: str) -> bool:
@@ -351,8 +367,10 @@ class TaskManager:
             task_dir = self.settings.data_dir / "tasks" / task_id
             input_dir = task_dir / "input"
             ofa_dir = task_dir / "ofa_results"
+            discovery_dir = task_dir / "discovery"
             input_dir.mkdir(parents=True, exist_ok=True)
             ofa_dir.mkdir(parents=True, exist_ok=True)
+            discovery_dir.mkdir(parents=True, exist_ok=True)
             (task_dir / "config.json").write_text(
                 json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -379,12 +397,21 @@ class TaskManager:
                 self._event(task_id, "INFO", f"读取主域名：{len(roots)}")
                 self._progress(task_id, "读取目标", 5, counts)
 
-                assets: list[dict[str, Any]] = []
                 ofa_config = config.get("oneforall", {})
-                if ofa_config.get("enabled", True) and roots:
+                subfinder_config = config.get("subfinder", {})
+                dnsx_config = config.get("dnsx", {})
+                discovery = resolve_discovery_config(
+                    str(config.get("discovery_preset", "legacy")),
+                    ofa_config,
+                    subfinder_config,
+                    dnsx_config,
+                )
+                discovery_assets: list[dict[str, Any]] = []
+                subfinder_rows: list[dict[str, Any]] = []
+                if discovery.oneforall_enabled and roots:
                     await self._run_oneforall(task_id, domains_path, ofa_dir, ofa_config)
-                    self._progress(task_id, "解析 OneForAll 结果", 30, counts)
-                    assets.extend(
+                    self._progress(task_id, "解析 OneForAll 结果", 20, counts)
+                    discovery_assets.extend(
                         parse_oneforall_results(
                             ofa_dir,
                             roots,
@@ -392,13 +419,84 @@ class TaskManager:
                             allowed_ports=scope_policy.allowed_ports,
                         )
                     )
-                    self._event(task_id, "INFO", f"OneForAll 提取 Web URL：{len(assets)}")
+                    self._event(
+                        task_id,
+                        "INFO",
+                        f"OneForAll 提取候选 Web URL：{len(discovery_assets)}",
+                    )
+
+                if discovery.subfinder_enabled and roots:
+                    subfinder_output = discovery_dir / "subfinder.jsonl"
+                    await self._run_subfinder(
+                        task_id,
+                        domains_path,
+                        subfinder_output,
+                        subfinder_config,
+                    )
+                    subfinder_rows = parse_subfinder_jsonl(subfinder_output, roots)
+                    self._event(
+                        task_id,
+                        "INFO",
+                        f"Subfinder 提取候选主机：{len(subfinder_rows)}",
+                    )
+                    self._progress(task_id, "合并域名发现结果", 26, counts)
+
+                if discovery.dnsx_enabled and roots:
+                    sources_by_host: dict[str, list[str]] = {root: ["Input"] for root in roots}
+                    for item in discovery_assets:
+                        host = str(item.get("subdomain") or "").lower().rstrip(".")
+                        if host:
+                            sources_by_host.setdefault(host, []).append(
+                                str(item.get("source") or "OneForAll")
+                            )
+                    for row in subfinder_rows:
+                        host = str(row["host"])
+                        sources = [
+                            source
+                            if str(source).lower().startswith("subfinder")
+                            else f"Subfinder:{source}"
+                            for source in row.get("sources", [])
+                        ] or ["Subfinder"]
+                        sources_by_host.setdefault(host, []).extend(sources)
+                    hosts_path = input_dir / "discovered_hosts.txt"
+                    hosts_path.write_text(
+                        "\n".join(sorted(sources_by_host)) + "\n",
+                        encoding="utf-8",
+                    )
+                    dnsx_output = discovery_dir / "dnsx.jsonl"
+                    await self._run_dnsx(
+                        task_id,
+                        hosts_path,
+                        dnsx_output,
+                        dnsx_config,
+                    )
+                    discovery_assets = parse_dnsx_jsonl(
+                        dnsx_output,
+                        roots,
+                        allowed_schemes=scope_policy.allowed_schemes,
+                        allowed_ports=scope_policy.allowed_ports,
+                        sources_by_host=sources_by_host,
+                    )
+                    self._event(
+                        task_id,
+                        "INFO",
+                        f"dnsx 验证后候选 Web URL：{len(discovery_assets)}",
+                    )
+                elif subfinder_rows:
+                    discovery_assets.extend(
+                        discovery_rows_to_assets(
+                            subfinder_rows,
+                            allowed_schemes=scope_policy.allowed_schemes,
+                            allowed_ports=scope_policy.allowed_ports,
+                        )
+                    )
+
+                assets = discovery_assets
 
                 if manual_urls:
                     assets.extend(manual_assets(manual_urls, roots))
 
-                deduped = {item["url"].rstrip("/"): item for item in assets}
-                assets = list(deduped.values())
+                assets = merge_assets(assets)
                 scoped_assets: list[dict[str, Any]] = []
                 for item in assets:
                     try:
@@ -440,10 +538,25 @@ class TaskManager:
                     findings, live_urls = await self._run_checker(
                         task_id, assets, checker_config, counts, scope_policy
                     )
-                    if ofa_config.get("enabled", True) and roots:
+                    if roots and (
+                        discovery.oneforall_enabled
+                        or discovery.subfinder_enabled
+                        or discovery.dnsx_enabled
+                    ):
                         assets = [item for item in assets if item["url"].rstrip("/") in live_urls]
                         counts["assets"] = len(assets)
                         counts["subdomains"] = len({item["subdomain"] for item in assets})
+                nuclei_config = config.get("nuclei", {})
+                if nuclei_config.get("enabled", False):
+                    nuclei_findings = await self._run_nuclei(
+                        task_id,
+                        task_dir,
+                        assets,
+                        findings,
+                        nuclei_config,
+                        scope_policy,
+                    )
+                    findings = merge_findings(findings, nuclei_findings)
                 self.database.replace_findings(task_id, findings)
                 self.database.replace_assets(task_id, assets)
                 write_findings_csv(task_dir / "result.csv", findings)
@@ -557,6 +670,114 @@ class TaskManager:
             raise RuntimeError(f"OneForAll 返回非零退出码：{return_code}")
         self._event(task_id, "SUCCESS", "OneForAll 执行完成")
 
+    async def _run_subfinder(
+        self,
+        task_id: str,
+        domains_path: Path,
+        output_path: Path,
+        config: dict[str, Any],
+    ) -> None:
+        command = [
+            self.settings.subfinder_binary,
+            "-dL",
+            str(domains_path),
+            "-silent",
+            "-json",
+            "-cs",
+            "-rl",
+            str(int(config.get("rate_limit", 5))),
+            "-o",
+            str(output_path),
+        ]
+        self._event(
+            task_id,
+            "INFO",
+            f"启动 Subfinder 被动发现，速率上限：{int(config.get('rate_limit', 5))}/秒",
+        )
+        self._progress(task_id, "Subfinder 被动发现", 22)
+        await self._run_external_tool(
+            task_id,
+            command,
+            timeout=float(config.get("timeout", 600)),
+            label="Subfinder",
+        )
+
+    async def _run_dnsx(
+        self,
+        task_id: str,
+        hosts_path: Path,
+        output_path: Path,
+        config: dict[str, Any],
+    ) -> None:
+        command = [
+            self.settings.dnsx_binary,
+            "-l",
+            str(hosts_path),
+            "-silent",
+            "-json",
+            "-resp",
+            "-a",
+            "-aaaa",
+            "-cname",
+            "-rl",
+            str(int(config.get("rate_limit", 50))),
+            "-o",
+            str(output_path),
+        ]
+        self._event(
+            task_id,
+            "INFO",
+            f"启动 dnsx 解析验证，速率上限：{int(config.get('rate_limit', 50))}/秒",
+        )
+        self._progress(task_id, "dnsx 解析验证", 30)
+        await self._run_external_tool(
+            task_id,
+            command,
+            timeout=float(config.get("timeout", 600)),
+            label="dnsx",
+        )
+
+    async def _run_external_tool(
+        self,
+        task_id: str,
+        command: list[str],
+        *,
+        timeout: float,
+        label: str,
+        cwd: Path | None = None,
+    ) -> None:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=os.name != "nt",
+            )
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(f"{label} 未安装或路径配置错误") from exc
+        self.processes[task_id] = process
+
+        async def consume_output() -> int:
+            assert process.stdout is not None
+            while line := await process.stdout.readline():
+                message = line.decode("utf-8", errors="replace").strip()
+                if message:
+                    self._event(task_id, "INFO", message)
+            return await process.wait()
+
+        try:
+            return_code = await asyncio.wait_for(consume_output(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            await self._terminate_process(process)
+            raise TimeoutError(f"{label} 运行超时") from exc
+        finally:
+            if self.processes.get(task_id) is process:
+                self.processes.pop(task_id, None)
+        if return_code != 0:
+            raise RuntimeError(f"{label} 返回非零退出码：{return_code}")
+        self._event(task_id, "SUCCESS", f"{label} 执行完成")
+
     async def _run_checker(
         self,
         task_id: str,
@@ -605,7 +826,7 @@ class TaskManager:
                 result = await future
                 results.append(result)
                 completed += 1
-                progress = 40 + int(completed / len(pending) * 52)
+                progress = 40 + int(completed / len(pending) * 45)
                 self._progress(task_id, f"敏感路径检测 {completed}/{len(pending)}", progress, counts)
 
         actionable = {FindingState.CONFIRMED, FindingState.PROTECTED, FindingState.REDIRECTED}
@@ -623,6 +844,9 @@ class TaskManager:
                 title=result.title,
                 server=result.server,
             )
+            source_asset["status_code"] = str(result.status_code or "")
+            source_asset["title"] = result.title
+            source_asset["server"] = result.server
             if not result.alive:
                 continue
             origin = origin_from_url(result.final_url or result.normalized_url)
@@ -661,6 +885,102 @@ class TaskManager:
                 )
         live_urls = {result.input_url.rstrip("/") for result in results if result.alive}
         return findings, live_urls
+
+    async def _run_nuclei(
+        self,
+        task_id: str,
+        task_dir: Path,
+        assets: list[dict[str, Any]],
+        path_findings: list[dict[str, Any]],
+        config: dict[str, Any],
+        scope_policy: ScopePolicy,
+    ) -> list[dict[str, Any]]:
+        routes = load_nuclei_routes(
+            self.settings.nuclei_allowlist_file,
+            self.settings.nuclei_templates_dir,
+        )
+        findings_by_base: dict[str, list[dict[str, Any]]] = {}
+        for finding in path_findings:
+            findings_by_base.setdefault(str(finding.get("base_url") or "").rstrip("/"), []).append(
+                finding
+            )
+        targets_by_template: dict[Path, list[str]] = {}
+        guard = ScopeGuard(scope_policy)
+        scoped_assets: dict[str, dict[str, Any]] = {}
+        for item in assets:
+            url = str(item["url"]).rstrip("/")
+            evidence_parts = [
+                str(item.get(field) or "")
+                for field in ("url", "title", "server", "banner", "source")
+            ]
+            for finding in findings_by_base.get(url, []):
+                evidence_parts.extend(
+                    str(finding.get(field) or "")
+                    for field in ("endpoint_url", "function", "category", "title", "server")
+                )
+            templates = select_nuclei_templates(routes, "\n".join(evidence_parts))
+            if not templates:
+                continue
+            try:
+                target = await guard.validate_target(url)
+            except ScopeViolation as exc:
+                self._event(
+                    task_id,
+                    "WARN",
+                    f"[{exc.code}] Nuclei 前置复检阻止目标：{url}（{exc}）",
+                )
+                continue
+            scoped_url = target.url.rstrip("/")
+            scoped_assets[scoped_url] = item
+            for template in templates:
+                targets_by_template.setdefault(template, []).append(scoped_url)
+
+        if not targets_by_template:
+            self._event(task_id, "INFO", "Nuclei 未找到与现有指纹匹配的白名单模板，已安全跳过")
+            return []
+
+        target_count = sum(len(set(urls)) for urls in targets_by_template.values())
+        self._event(
+            task_id,
+            "INFO",
+            f"启动 Nuclei 指纹定向验证：{len(targets_by_template)} 个白名单模板，"
+            f"{target_count} 个模板/目标组合，速率上限 {int(config.get('rate_limit', 2))}/秒",
+        )
+        self._progress(task_id, "Nuclei 定向验证", 88)
+        findings: list[dict[str, Any]] = []
+        for index, (template, urls) in enumerate(targets_by_template.items(), start=1):
+            targets_path = task_dir / f"nuclei_targets_{index}.txt"
+            output_path = task_dir / f"nuclei_{index}.jsonl"
+            targets_path.write_text(
+                "\n".join(sorted(set(urls))) + "\n",
+                encoding="utf-8",
+            )
+            command = build_nuclei_command(
+                self.settings.nuclei_binary,
+                targets_path,
+                output_path,
+                [template],
+                rate_limit=int(config.get("rate_limit", 2)),
+                concurrency=int(config.get("concurrency", 2)),
+            )
+            try:
+                await self._run_external_tool(
+                    task_id,
+                    command,
+                    timeout=float(config.get("timeout", 900)),
+                    label=f"Nuclei[{template.stem}]",
+                )
+                findings.extend(parse_nuclei_jsonl(output_path, scoped_assets))
+            finally:
+                output_path.unlink(missing_ok=True)
+            progress = 88 + int(index / len(targets_by_template) * 8)
+            self._progress(
+                task_id,
+                f"Nuclei 定向验证 {index}/{len(targets_by_template)}",
+                progress,
+            )
+        self._event(task_id, "SUCCESS", f"Nuclei 定向验证完成，命中：{len(findings)}")
+        return findings
 
     async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
         if process.returncode is not None:

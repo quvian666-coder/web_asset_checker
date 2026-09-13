@@ -1,0 +1,6 @@
+# 格式：逗号分隔的指纹关键词|相对于 NUCLEI_TEMPLATES_DIR 的官方签名模板路径
+# 只有当前资产的标题、Server 或路径检测结果命中关键词时，才运行对应模板。
+git configuration,.git/config,source_control|http/exposures/configs/git-config.yaml
+jenkins,hudson|http/exposed-panels/jenkins-api-panel.yaml
+grafana|http/exposed-panels/grafana-detect.yaml
+springboot,actuator|http/technologies/springboot-actuator.yaml

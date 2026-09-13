@@ -4,8 +4,17 @@
 {% block page_subtitle %}工具状态、服务路径和敏感路径分类规则{% endblock %}
 {% block content %}
 <section class="settings-grid">
-  <article class="panel"><div class="panel-header compact"><div><span class="eyebrow">运行环境</span><h2>工具状态</h2></div></div><dl class="settings-list"><div><dt>OneForAll</dt><dd><span class="status-badge {% if tool_status.oneforall %}success{% else %}failed{% endif %}">{% if tool_status.oneforall %}可用{% else %}未配置{% endif %}</span></dd></div><div><dt>OneForAll 目录</dt><dd><code>{{ tool_status.oneforall_dir }}</code></dd></div><div><dt>OneForAll Python</dt><dd><code>{{ tool_status.oneforall_python }}</code></dd></div><div><dt>Nuclei</dt><dd><span class="status-badge {% if tool_status.nuclei %}success{% else %}failed{% endif %}">{% if tool_status.nuclei %}已检测{% else %}未检测到{% endif %}</span></dd></div><div><dt>MySQL</dt><dd><code>{{ tool_status.mysql_user }}@{{ tool_status.mysql_host }}/{{ tool_status.mysql_database }}</code></dd></div><div><dt>数据目录</dt><dd><code>{{ tool_status.data_dir }}</code></dd></div></dl><p class="helper-box">MySQL 密码、系统工具路径通过 Linux 环境变量设置，前端不返回密码，避免凭据泄露和任意路径注入。</p></article>
-  <article class="panel"><div class="panel-header compact"><div><span class="eyebrow">默认限制</span><h2>安全边界</h2></div></div><ul class="check-list"><li>默认一次只执行一个扫描任务</li><li>默认最大资产数 500</li><li>只允许 small/medium 端口组</li><li>所有子域必须属于输入主域名</li><li>OneForAll 使用独立 Python 环境</li><li>Nuclei 第一版不自动执行</li></ul></article>
+  <article class="panel"><div class="panel-header compact"><div><span class="eyebrow">运行环境</span><h2>工具状态</h2></div></div><dl class="settings-list">
+    <div><dt>OneForAll</dt><dd><span class="status-badge {% if tool_status.oneforall %}success{% else %}failed{% endif %}">{% if tool_status.oneforall %}可用{% else %}未配置{% endif %}</span> <code>{{ tool_status.oneforall_dir }}</code></dd></div>
+    <div><dt>Subfinder</dt><dd><span class="status-badge {% if tool_status.subfinder %}success{% else %}failed{% endif %}">{% if tool_status.subfinder %}可用{% else %}未检测到{% endif %}</span> <code>{{ tool_status.subfinder_path }}</code></dd></div>
+    <div><dt>dnsx</dt><dd><span class="status-badge {% if tool_status.dnsx %}success{% else %}failed{% endif %}">{% if tool_status.dnsx %}可用{% else %}未检测到{% endif %}</span> <code>{{ tool_status.dnsx_path }}</code></dd></div>
+    <div><dt>Nuclei</dt><dd><span class="status-badge {% if tool_status.nuclei_ready %}success{% else %}failed{% endif %}">{% if tool_status.nuclei_ready %}白名单模式可用{% else %}未完全配置{% endif %}</span> <code>{{ tool_status.nuclei_path }}</code></dd></div>
+    <div><dt>Nuclei 模板</dt><dd><code>{{ tool_status.nuclei_templates_dir }}</code></dd></div>
+    <div><dt>Nuclei 白名单</dt><dd><code>{{ tool_status.nuclei_allowlist_file }}</code></dd></div>
+    <div><dt>MySQL</dt><dd><code>{{ tool_status.mysql_user }}@{{ tool_status.mysql_host }}/{{ tool_status.mysql_database }}</code></dd></div>
+    <div><dt>数据目录</dt><dd><code>{{ tool_status.data_dir }}</code></dd></div>
+  </dl><p class="helper-box">密码和系统工具路径仅通过 Linux 环境变量设置。扫描任务只接收固定工具路径，不允许前端提交任意命令或模板路径。</p></article>
+  <article class="panel"><div class="panel-header compact"><div><span class="eyebrow">默认限制</span><h2>安全边界</h2></div></div><ul class="check-list"><li>默认一次只执行一个扫描任务</li><li>默认最大资产数 500</li><li>四种发现方案共用同一授权范围</li><li>所有候选 URL 在 HTTP 前重新解析并校验 IP</li><li>OneForAll 保留独立 Python 环境</li><li>Nuclei 默认关闭，仅运行指纹匹配的官方签名白名单模板</li><li>Nuclei 默认 2 请求/秒、禁跳转、禁 OAST、禁私网访问</li></ul></article>
 </section>
 
 <section class="panel rules-panel">

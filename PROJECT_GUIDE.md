@@ -79,12 +79,30 @@
 - 保留已有任务取消和 SSE，不重写任务系统。
 - 增加复制任务、失败/取消任务重试、复用历史资产仅重跑路径检测。
 - 未实现暂停和断点续跑。
-- 关闭模块时会禁用子参数；关闭路径检测时会同步关闭 OneForAll。
+- 关闭模块时会禁用子参数；关闭路径检测时会同步关闭依赖存活资产的 Nuclei。
 - 手工 URL 文案已改为：可单独填写；填写主域名后必须属于主域名及配置范围。
 - 规则编辑器增加前后端格式检查和重复路径拒绝。
 - 空状态增加“新建扫描”入口。
 - 移动导航增加 `aria-current`、`aria-expanded`、`aria-controls`、遮罩和 Escape 关闭。
 - 表格增加 `aria-label`，并移除会被严格 CSP 阻止的内联事件和内联样式。
+
+#### E. 多源发现与受控 Nuclei（2026-09-13）
+
+- 保留 OneForAll，不替换、不删除其代码、虚拟环境或历史任务。
+- 新增四种发现方案：`quick`（Subfinder → dnsx）、`comprehensive`（Subfinder + OneForAll → 合并 → dnsx，默认推荐）、`legacy`（OneForAll + 内置 MassDNS）和 `custom`（独立开关）。
+- 新增 `webapp/toolchain.py`，集中负责预设解析、Subfinder/dnsx JSONL 解析、URL/IP/来源合并、Nuclei 白名单解析和 finding 转换。
+- Subfinder 只做被动子域发现，默认速率 5/秒；dnsx 验证 A、AAAA 和 CNAME，默认速率 50/秒。
+- 多个工具发现同一 URL 时不会互相覆盖，`assets.source` 会合并来源，IP 字段也会合并去重。
+- 所有候选资产无论来自哪个工具，仍必须经过 `ScopeGuard.validate_target()`；工具不能绕过允许域名、CIDR、协议、端口、排除项和授权有效期。
+- Nuclei 默认关闭，只对路径检测确认存活的资产执行。它按单个资产的标题、Server、URL 和已发现入口选择模板，不匹配指纹时安全跳过。
+- `nuclei-allowlist.txt` 当前只允许官方 Git 配置、Jenkins、Grafana 和 Spring Boot 检测模板，前端不能提交模板路径。
+- Nuclei 固定使用 HTTP 模板、官方签名校验、禁重定向、禁 OAST、禁本地/私网访问、1 MiB 响应读取上限、低速率和小并发。
+- Nuclei JSONL 只作为进程间临时文件；转换为最小 finding 后立即删除，避免模板 extractor 将凭据片段长期落盘。
+- 如果 Nuclei 与平台路径检测命中同一 Endpoint URL，会合并证据、取更高复测优先级和置信度，避免重复 finding。
+- 路径检测得到的状态码、标题和 Server 会同步回内存资产，避免任务末尾用旧数据覆盖数据库，也为 Nuclei 指纹路由提供证据。
+- 旧任务配置没有 `discovery_preset` 时按 `legacy` 执行，保证任务重试/复制的向后兼容；“仅重跑路径检测”会关闭全部发现器和 Nuclei。
+
+安全限制：Nuclei 固定启用 `-restrict-local-network-access`，因此即使平台范围显式允许 RFC1918 CIDR，Nuclei 阶段也仍会跳过私网；平台自带路径检测器不受此额外限制。此选择是外部模板执行的纵深防御，不应删除。
 
 ### 0.3 新增或重点修改文件
 
@@ -92,10 +110,13 @@
 webapp/scope.py                    # 范围策略、DNS/IP/重定向校验
 webapp/security.py                 # 登录限速和安全响应头
 webapp/findings.py                 # finding 指纹和复测状态
+webapp/toolchain.py                # Subfinder/dnsx/Nuclei 适配与安全路由
 webapp/static/findings.js          # 复测弹窗与 API 交互
+nuclei-allowlist.txt               # 指纹关键词到官方签名模板的固定映射
 tests/test_scope.py                # 范围与重定向测试
 tests/test_security.py             # 登录限速测试
 tests/test_findings.py             # 指纹和复测状态测试
+tests/test_toolchain.py             # 发现预设、解析器、白名单和 Nuclei 结果测试
 deploy/install-production.sh       # Linux 生产安装脚本
 deploy/web-asset-console.service   # 非 root systemd 沙箱
 deploy/nginx-web-asset-console.conf # HTTPS 反向代理
@@ -116,44 +137,25 @@ Get-ChildItem "$root\webapp\static\*.js" | ForEach-Object { node --check $_.Full
 git -C $root status -sb
 ```
 
-最后一次完整结果：35 项测试通过。测试输出只有 FastAPI/Starlette 关于 TestClient 的弃用警告，不影响结果，当前不应为了该警告引入新依赖。
+2026-09-13 本地最后一次完整结果：51 项测试通过，Python 编译检查和全部 JavaScript 语法检查通过。测试输出只有 FastAPI/Starlette 关于 TestClient 的弃用警告，不影响结果，当前不应为了该警告引入新依赖。
 
-### 0.5 SSH 登录与专用部署密钥
+### 0.5 SSH 登录与 Paramiko 部署方式
 
-本机可用的 SSH 客户端是：
+服务器允许 root 密码认证。`ssh.exe` 在非交互自动化中不能填写密码不代表服务器要求公钥；Codex 可以使用隔离目录中的 Paramiko 按 SSH 协议提交用户已授权的凭据。不要修改全局 Python，也不要把密码写进仓库、本文档、环境示例或命令日志。
 
-```text
-D:\Program Files\Git\usr\bin\ssh.exe
-```
-
-已生成专用部署密钥：
-
-```text
-私钥：C:\Users\LENOVO\.ssh\codex_web_asset
-公钥：C:\Users\LENOVO\.ssh\codex_web_asset.pub
-```
-
-公钥内容（公开信息，可写入服务器）：
-
-```text
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINXFV3+37O8Y8xInKNv4mlmv7/GAUueerftYuFnkyEIH codex-web-asset-deploy
-```
-
-服务器使用 root 密码登录，但自动化工具不能安全输入交互式密码。用户应在本机 PowerShell 手工执行一次以下命令并输入 root 密码，不要把密码发到对话中：
+本机隔离依赖准备：
 
 ```powershell
-Get-Content "$HOME\.ssh\codex_web_asset.pub" |
-  & 'D:\Program Files\Git\usr\bin\ssh.exe' root@10.0.0.174 `
-  'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys'
+$Python = "C:\Users\LENOVO\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+$Deps = "$env:TEMP\codex_ssh_deps"
+New-Item -ItemType Directory -Force $Deps | Out-Null
+& $Python -m pip install --target $Deps paramiko
+$env:PYTHONPATH = $Deps
 ```
 
-授权后验证：
+连接参数为 `10.0.0.174`、用户 `root`；密码应只从当前用户授权上下文临时提供给 `client.connect()`。文件增量部署使用 `client.open_sftp().put()`，不得覆盖 `.venv`、`data`、`paths.txt`、`urls.txt`、`result.csv`、环境文件、MySQL 数据或 OneForAll。
 
-```powershell
-& 'D:\Program Files\Git\usr\bin\ssh.exe' `
-  -i "$HOME\.ssh\codex_web_asset" -o BatchMode=yes root@10.0.0.174 `
-  'id; hostname; systemctl status web-asset-console --no-pager'
-```
+2026-09-13 本轮连接诊断：目标 TCP 22 曾可建立连接，但服务器在发送 SSH 协议横幅前主动关闭，Paramiko 报 `Error reading SSH protocol banner`；同时 `http://10.0.0.174:8000/login` 超时。出现该状态时不要假定部署成功，也不要反复重启本地或远程进程，应等待服务器网络/SSH 恢复后重新执行只读状态检查。
 
 ### 0.6 已完成的实际部署记录与可选生产迁移
 
@@ -260,7 +262,7 @@ ss -lntp | grep -E '(:80|:443|:8000|:3306)'
 - systemd 的 `ProtectSystem=strict` 和 `ProtectHome=true` 会阻止访问 `/root/OneForAll`，所以必须完成 `/opt/OneForAll` 迁移。
 - 如果 OneForAll 仍尝试写自身代码目录，应根据日志只为其必要运行目录增加 `ReadWritePaths`，不要改回 root 运行整个 Web 服务。
 - 登录限速当前使用进程内存，适用于当前单进程 Uvicorn；未来多进程部署才需要 Redis/MySQL 共享限速。
-- 当前未实现 MFA、完整 RBAC、PDF、定时任务、通知、Nuclei 自动扫描、暂停和断点续跑，这些不是本轮验收阻塞项。
+- 当前未实现 MFA、完整 RBAC、PDF、定时任务、通知、暂停和断点续跑；Nuclei 已实现为默认关闭的指纹定向白名单验证，不是宽泛自动扫描。
 - 当前功能部署已验证，但开发分支尚未合并到 `main`；不要删除 `/root/web_asset_checker` 和数据库备份。
 
 ## 1. 项目定位
@@ -268,17 +270,19 @@ ss -lntp | grep -E '(:80|:443|:8000|:3306)'
 Web Asset Console 是一个轻量级 Web 资产发现和敏感路径辅助检测平台，将以下工作串成一个自动任务：
 
 ```text
-输入已授权主域名
+输入已授权主域名 / 手工 URL
     ↓
-OneForAll 子域名发现和 Web 请求
+按预设运行 OneForAll、Subfinder 与 dnsx
     ↓
-解析、范围校验和 URL 去重
+多源合并、DNS/IP/协议/端口范围复检和 URL 去重
     ↓
 读取 paths.txt 的全部启用规则
     ↓
 存活检测、软 404 识别和敏感路径存在性检测
     ↓
 功能分类、访问状态和复测优先级计算
+    ↓
+可选的 Nuclei 指纹定向白名单验证
     ↓
 MySQL 持久化 + Web 展示 + CSV 导出
 ```
@@ -343,8 +347,9 @@ web_asset_checker/
 ### 4.1 OneForAll
 
 - 根据主域名收集子域名。
-- 可选 DNS 解析、HTTP 请求、子域爆破、存活过滤和接管检查。
-- 平台固定输出 JSON，再从 JSON 中提取 Web URL。
+- 保留内置 DNS/MassDNS 和可选子域爆破能力。
+- 平台固定 `--req False --alive False --takeover False`，OneForAll 不直接进行 Web 请求或接管检测。
+- 平台读取 JSON 中的子域并按授权协议/端口构造候选 URL。
 - 只保留属于输入主域名范围的结果。
 
 ### 4.2 Python 敏感路径检测器
@@ -357,10 +362,19 @@ web_asset_checker/
 
 ### 4.3 Nuclei
 
-- 当前只检测 Nuclei 是否安装并在设置页展示。
-- 第一版不会自动运行 Nuclei 模板，避免未审核模板扩大请求范围。
+- 默认关闭，必须由用户对单个任务明确启用。
+- 只接收平台路径检测确认存活并再次通过范围复检的 URL。
+- 根据每个资产已有指纹选择 `nuclei-allowlist.txt` 中的精确官方模板；没有匹配模板时不运行。
+- 强制官方签名校验、HTTP 类型、禁跳转、禁 OAST、禁私网、低速率和小并发。
+- Nuclei 命中会转换成现有 finding；同一 Endpoint URL 与路径检测结果合并。
 
-### 4.4 httpx
+### 4.4 Subfinder 与 dnsx
+
+- Subfinder 以 `-dL` 批量读取授权主域名，使用 JSONL 和来源字段输出被动发现结果，不执行 HTTP。
+- dnsx 对 OneForAll、Subfinder 和输入主域名的合并主机集执行 A/AAAA/CNAME 验证。
+- dnsx 输出只用于候选过滤与证据保存；平台仍会在 HTTP 前重新解析并校验全部地址。
+
+### 4.5 httpx
 
 - `requirements.txt` 中的 `httpx` 是 Python HTTP 依赖。
 - Linux 上安装的 Go `httpx` 不在当前 Web 任务主链路中，不需要另外配置参数。
@@ -369,17 +383,17 @@ web_asset_checker/
 
 使用者在 Web 页面中只需：
 
-1. 输入已授权的主域名。
-2. 保持“OneForAll 资产发现”和“敏感路径检测”开启。
-3. 设置参数并勾选授权确认。
+1. 输入已授权的主域名或手工 URL。
+2. 选择“综合（推荐）”“快速”“兼容”或“自定义”发现方案。
+3. 按需开启 Nuclei，设置参数并勾选授权确认。
 4. 点击“创建并运行任务”。
 
-后续流程全部自动执行：OneForAll 完成后，平台自动解析 URL、去重、读取 `paths.txt`、运行敏感路径检测、存入 MySQL 并生成 CSV。不需要手工导入 OneForAll 结果。
+后续流程全部自动执行：发现器完成后，平台合并来源、调用 dnsx、逐个范围复检、读取 `paths.txt`、运行敏感路径检测、按指纹选择 Nuclei 白名单模板、存入 MySQL 并生成 CSV。不需要手工导入任何外部工具结果。
 
 手工 URL 是可选补充：
 
-- OneForAll 开启时：与 OneForAll 结果合并后去重。
-- OneForAll 关闭时：必须提供手工 URL。
+- 任一发现器开启时：与发现结果合并后去重。
+- 所有发现器关闭时：可使用手工 URL 单独检测。
 - 如同时提供主域名，手工 URL 也必须属于授权主域名范围。
 
 ## 6. Web 参数说明
@@ -394,20 +408,38 @@ web_asset_checker/
 | 最大资产数 | `500` | 1–5000，超过则任务停止，防止意外扩大范围 |
 | 授权确认 | 未勾选 | 未勾选时禁止创建扫描任务 |
 
-### 6.2 OneForAll 参数
+### 6.2 资产发现方案
+
+| 方案 | 工具链 | 默认用途 |
+|---|---|---|
+| `quick` | Subfinder → dnsx | 快速被动发现 |
+| `comprehensive` | Subfinder + OneForAll → 合并 → dnsx | 默认推荐、提高来源覆盖 |
+| `legacy` | OneForAll + 内置 MassDNS | 保持原流程兼容 |
+| `custom` | 三个发现组件独立开关 | 调试和定向任务 |
+
+### 6.3 OneForAll 参数
 
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
 | 启用 | 开 | 有主域名时调用 OneForAll |
 | 端口组 | `small` | `small` 主要检测 80/443；`medium` 增加 8000/8080/8443 等 |
 | DNS 解析 | 开 | 对发现的子域执行 DNS 解析 |
-| HTTP 请求 | 开 | 提取可用 Web URL、状态码和标题 |
+| HTTP 请求 | 固定关 | Web 请求统一由平台范围校验器执行 |
 | 子域爆破 | 关 | 会明显增加 DNS 请求，仅在授权范围内使用 |
 | 仅导出存活 | 关 | 关闭可保留部分 4xx/5xx 高价值资产 |
 | 接管检查 | 关 | OneForAll 自带的 takeover 检查，默认不运行 |
 | 运行超时 | `1800` 秒 | 60–7200 秒；超时会终止 OneForAll 进程 |
 
-### 6.3 敏感路径检测参数
+### 6.4 Subfinder / dnsx 参数
+
+| 工具 | 参数 | 默认值 | 允许范围 |
+|---|---|---:|---:|
+| Subfinder | 速率上限 | 5/秒 | 1–50 |
+| Subfinder | 运行超时 | 600 秒 | 60–3600 |
+| dnsx | 速率上限 | 50/秒 | 1–500 |
+| dnsx | 运行超时 | 600 秒 | 60–3600 |
+
+### 6.5 敏感路径检测参数
 
 | 参数 | 默认值 | 允许范围 | 含义 |
 |---|---:|---:|---|
@@ -420,6 +452,15 @@ web_asset_checker/
 | 忽略 HTTPS 证书 | 关 | - | 自签名证书目标可开启；会降低 TLS 验证保护 |
 
 并发示例：全局并发 10、单主机并发 2，表示任务总请求最多同时 10 个，但同一网站最多同时 2 个。这些参数不控制 OneForAll 内部并发。
+
+### 6.6 Nuclei 参数
+
+| 参数 | 默认值 | 允许范围 | 说明 |
+|---|---:|---:|---|
+| 启用 | 关 | - | 只对存活资产执行指纹定向模板 |
+| 速率上限 | 2/秒 | 1–20 | Nuclei 全局请求速率 |
+| 模板并发 | 2 | 1–5 | 同时处理模板数量 |
+| 单模板进程超时 | 900 秒 | 60–3600 | 超时终止当前 Nuclei 子进程 |
 
 ## 7. paths.txt 批量规则
 
@@ -526,7 +567,11 @@ MYSQL_DATABASE=web_asset_checker
 
 ONEFORALL_DIR=/root/OneForAll
 ONEFORALL_PYTHON=/root/OneForAll/.venv/bin/python
+SUBFINDER_BIN=/root/go/bin/subfinder
+DNSX_BIN=/root/go/bin/dnsx
 NUCLEI_BIN=/root/go/bin/nuclei
+NUCLEI_TEMPLATES_DIR=/root/nuclei-templates
+NUCLEI_ALLOWLIST_FILE=/root/web_asset_checker/nuclei-allowlist.txt
 ```
 
 | 变量 | 说明 |
@@ -539,7 +584,10 @@ NUCLEI_BIN=/root/go/bin/nuclei
 | `WEBAPP_DATA_DIR` | 任务文件和 CSV 保存目录 |
 | `MYSQL_*` | MySQL 连接参数 |
 | `ONEFORALL_*` | OneForAll 目录和其独立 Python |
+| `SUBFINDER_BIN` / `DNSX_BIN` | ProjectDiscovery 发现工具可执行文件绝对路径 |
 | `NUCLEI_BIN` | Nuclei 可执行文件绝对路径 |
+| `NUCLEI_TEMPLATES_DIR` | 官方 `nuclei-templates` 根目录 |
+| `NUCLEI_ALLOWLIST_FILE` | 项目维护的模板路由白名单文件 |
 
 修改环境变量后必须重启服务：
 
@@ -674,7 +722,7 @@ apt install -y python3 python3-venv python3-pip mysql-server curl
 systemctl enable --now mysql
 ```
 
-OneForAll 和 Nuclei 应先安装到预期路径，或修改环境变量指向真实路径。
+OneForAll、Subfinder、dnsx、Nuclei 和官方模板应先安装到预期路径，或修改环境变量指向真实路径。
 
 ### 11.2 项目 Python
 
@@ -937,5 +985,7 @@ cd /root/web_asset_checker
 
 # 检查工具
 test -f /root/OneForAll/oneforall.py && echo OneForAll-OK
+/root/go/bin/subfinder -version
+/root/go/bin/dnsx -version
 /root/go/bin/nuclei -version
 ```

@@ -1,10 +1,11 @@
 # Web Asset Console
 
-面向已授权安全测试的 Web 资产发现与敏感入口分类工具。项目保留原有 CLI，同时提供 FastAPI Web 控制台，将 OneForAll 资产发现、异步 Web 存活检测、软 404 识别、敏感路径分类和 CSV 报告串成一个任务流程。
+面向已授权安全测试的 Web 资产发现与敏感入口分类工具。项目保留原有 CLI，同时提供 FastAPI Web 控制台，将 OneForAll、Subfinder、dnsx、受控 Nuclei、异步 Web 存活检测、软 404 识别、敏感路径分类和 CSV 报告串成一个任务流程。
 
 ## 功能
 
-- OneForAll 批量主域名发现，支持 `small/medium` 端口组。
+- OneForAll 保留为完整发现器，并新增 Subfinder + dnsx 快速发现链。
+- 快速、综合、兼容、自定义四种发现方案；多源结果合并 URL、来源和 IP 后统一范围复检。
 - 手工 URL 输入，可单独使用敏感路径检测器。
 - 全局并发、单主机并发、超时、重试、TLS 校验和软 404 阈值配置。
 - 路径规则可视化编辑，包含功能、分类和标题关键词。
@@ -12,7 +13,7 @@
 - MySQL 持久化任务、事件日志、资产与敏感入口。
 - SSE 实时日志、进度、任务取消、CSV 下载。
 - 登录、Session、CSRF 和授权范围过滤。
-- Nuclei 安装状态展示；第一版不自动执行 Nuclei 模板。
+- Nuclei 默认关闭；启用后只运行与当前资产指纹匹配的官方签名白名单模板。
 
 ## 项目结构
 
@@ -23,12 +24,14 @@ web_asset_checker/
 ├── webapp/
 │   ├── app.py              # FastAPI 页面与 API
 │   ├── runner.py           # OneForAll 和扫描任务执行器
+│   ├── toolchain.py        # Subfinder/dnsx/Nuclei 适配、解析与安全路由
 │   ├── database.py         # MySQL 数据层
 │   ├── classifier.py       # 功能识别与优先级
 │   ├── templates/          # Jinja2 页面
 │   └── static/             # CSS 与 JavaScript
 ├── tests/
 ├── deploy/
+├── nuclei-allowlist.txt    # Nuclei 指纹关键词与固定模板映射
 ├── requirements.txt
 └── .env.example
 ```
@@ -90,6 +93,29 @@ MYSQL_PASSWORD
 ONEFORALL_DIR
 ONEFORALL_PYTHON
 ```
+
+按实际安装路径确认（命令在 `PATH` 中时可保留默认值）：
+
+```text
+SUBFINDER_BIN
+DNSX_BIN
+NUCLEI_BIN
+NUCLEI_TEMPLATES_DIR
+NUCLEI_ALLOWLIST_FILE
+```
+
+## 发现方案与 Nuclei
+
+| 方案 | 执行链 | 适用场景 |
+|---|---|---|
+| 快速 | `Subfinder → dnsx` | 日常、小范围、需要快速反馈 |
+| 综合（推荐） | `Subfinder + OneForAll → 合并去重 → dnsx` | 正式资产盘点，兼顾覆盖率与可解释来源 |
+| 兼容 | `OneForAll + 内置 MassDNS` | 与原流程对照或 ProjectDiscovery 工具不可用 |
+| 自定义 | 独立开关三个发现组件 | 调试和针对性任务 |
+
+Nuclei 是独立的末端验证阶段，不替代路径检测器。平台先根据单个资产的标题、Server 和已发现入口选择对应模板，再次执行范围校验后才启动 Nuclei。命令固定启用签名校验、禁用 HTTP 跳转、OAST 和私网访问，并限制为 HTTP 类型、低速率和小并发；前端不能提交任意模板路径。
+
+默认白名单只包含经过人工审阅的 Git 配置、Jenkins、Grafana 和 Spring Boot 探测模板。更新 `nuclei-templates` 后应重新审阅 `nuclei-allowlist.txt`，不要把目录或宽泛标签加入白名单。
 
 如果使用 Nginx HTTPS，将以下配置改成 `true`：
 
@@ -157,7 +183,7 @@ proxy_read_timeout 3600s;
 
 1. 登录控制台。
 2. 输入已授权主域名或手工 URL。
-3. 配置 OneForAll 与敏感路径参数。
+3. 选择快速、综合、兼容或自定义发现方案，并配置敏感路径参数。
 4. 勾选授权确认并创建任务。
 5. 在任务详情查看进度和实时日志。
 6. 在资产中心和敏感入口中心筛选结果。
@@ -222,5 +248,6 @@ python -m compileall -q main.py webapp
 
 - 仅扫描自己拥有或已经获得明确书面授权的目标。
 - 本工具只进行存在性探测和结果整理，不进行登录绕过或漏洞利用。
+- Nuclei 命中是自动化证据，不等于漏洞最终确认，必须进入人工复测闭环。
 - 对 Git 配置、备份文件等结果只确认存在并记录证据，不下载完整敏感内容。
 - P1/P2/P3 表示人工复测优先级，不等同于漏洞严重等级。
