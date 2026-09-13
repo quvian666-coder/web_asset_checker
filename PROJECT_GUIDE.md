@@ -7,27 +7,29 @@
 
 ### 0.1 当前结论
 
-本地改造已经完成并推送到 GitHub，并于 **2026-06-22 原地增量部署到 Linux 服务器**。部署按用户要求保留现有 `/root/web_asset_checker`、root systemd、HTTP 8000、环境变量、数据库、虚拟环境、任务数据和路径规则；没有应用 `/opt`、Nginx、HTTPS、低权限用户或密码轮换模板。
+基础安全改造已于 **2026-06-22 原地增量部署到 Linux 服务器**。2026-09-13 的多源发现和 Nuclei 白名单功能已完成本地测试、合并并推送 GitHub；但本轮 Linux 增量部署尚未完成，因为服务器未返回 SSH 协议横幅且 Web 8000 超时。后续部署必须继续保留现有 `/root/web_asset_checker`、root systemd、HTTP 8000、环境变量、数据库、虚拟环境、任务数据、路径规则和 OneForAll，不得重置配置。
 
 | 项目 | 当前状态 |
 |---|---|
 | 本地项目 | `D:\桌面\python渗透测试工具\web_asset_checker` |
 | GitHub | `https://github.com/quvian666-coder/web_asset_checker.git`，Public |
-| 默认分支 | `main`，已合并至 `8b2a33d` |
-| 开发分支 | `codex/harden-platform`，保留作为回滚参照 |
-| 当前改造提交 | `8b2a33d`，已推送到 `origin/main` |
-| 合并状态 | 2026-09-13 已通过 fast-forward 合并到 `main`，无需 PR |
-| 自动测试 | Linux 39 项 `unittest` 全部通过 |
+| 默认分支 | `main`，包含多源工具链合并提交 `abd8a4a` |
+| 开发分支 | `codex/discovery-nuclei-adapters`，已合并，暂留作实现参照 |
+| 当前功能提交 | `abd8a4a`，已推送到 `origin/main` |
+| 合并状态 | 2026-09-13 已通过 `--no-ff` 合并到 `main`，无需 PR |
+| 自动测试 | 本地 51 项 `unittest` 全部通过；Linux 本轮待部署后复验 |
 | Python 编译检查 | `python -m compileall -q main.py webapp` 通过 |
 | JavaScript 语法 | `node --check webapp/static/*.js` 通过 |
-| Linux 服务器 | `10.0.0.174`，已运行 `8b2a33d` 对应代码 |
+| Linux 服务器 | `10.0.0.174`，最后确认仍运行旧版；新工具链尚未部署 |
 | Linux 登录 | 用户确认使用 `root` 账号和密码登录；密码不得写入仓库或本文档 |
-| 部署状态 | 已通过 Paramiko 使用用户明确授权的 root 密码完成；密码未写入文件、仓库或日志 |
+| 本轮部署状态 | 阻塞于 SSH 横幅前断开；没有停止、重启或覆盖远端服务 |
 | 当前访问地址 | `http://10.0.0.174:8000` |
 | 数据库迁移 | `schema_migrations=[1,2]`；迁移 2 将 `assets.ip` 扩展为 `TEXT` |
 | 服务器备份 | `/root/web-asset-backups/20260621133810` |
 
 2026-09-13 仓库状态更新：GitHub 仓库已公开，`codex/harden-platform` 已快进合并到默认分支 `main`。本次仅更新交接状态文档，没有修改扫描逻辑或 Linux 服务。
+
+2026-09-13 工具链更新：GitHub `main` 已包含 `abd8a4a`。新增 Subfinder、dnsx、四种发现方案和受控 Nuclei；本地 51 项测试通过。Linux 部署必须在 `10.0.0.174` 恢复正常 SSH 横幅后继续，不能把“TCP 22 可连接”误判为“SSH 可登录”。
 
 2026-06-22 热修复：新建扫描页面的空端口字段曾被前端 `Number("")` 转换为端口 `0`，触发 `[SCOPE_PORT_INVALID]`。现已在数值转换前过滤空项，并原地部署；无需修改已有范围配置或服务器配置。
 
