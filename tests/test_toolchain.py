@@ -8,11 +8,15 @@ from pathlib import Path
 from webapp.app import NucleiRequest
 from webapp.toolchain import (
     build_nuclei_command,
+    discovery_rows_to_assets,
+    load_nuclei_routes,
     merge_assets,
+    merge_findings,
     parse_dnsx_jsonl,
     parse_nuclei_jsonl,
     parse_subfinder_jsonl,
     resolve_discovery_config,
+    select_nuclei_templates,
 )
 
 
@@ -134,6 +138,24 @@ class DiscoveryParserTests(unittest.TestCase):
         self.assertEqual(rows[0]["source"], "OneForAll,Subfinder+dnsx")
         self.assertEqual(rows[0]["ip"], "93.184.216.34,2001:db8::1")
 
+    def test_subfinder_can_feed_scope_candidates_without_dnsx(self) -> None:
+        rows = discovery_rows_to_assets(
+            [
+                {
+                    "host": "api.example.com",
+                    "root_domain": "example.com",
+                    "sources": ["crtsh"],
+                }
+            ],
+            allowed_schemes={"http", "https"},
+            allowed_ports={80, 443},
+        )
+        self.assertEqual(
+            {row["url"] for row in rows},
+            {"http://api.example.com", "https://api.example.com"},
+        )
+        self.assertEqual(rows[0]["source"], "Subfinder:crtsh")
+
 
 class NucleiAdapterTests(unittest.TestCase):
     def test_command_is_exact_allowlisted_and_bounded(self) -> None:
@@ -149,11 +171,12 @@ class NucleiAdapterTests(unittest.TestCase):
             )
         self.assertIn("-disable-unsigned-templates", command)
         self.assertIn("-disable-redirects", command)
+        self.assertIn("-restrict-local-network-access", command)
         self.assertEqual(command[command.index("-rate-limit") + 1], "2")
         self.assertEqual(command[command.index("-concurrency") + 1], "2")
         self.assertEqual(
             command[command.index("-exclude-tags") + 1],
-            "dos,brute-force,intrusive,fuzz",
+            "dos,brute-force,intrusive,fuzz,oast",
         )
         self.assertEqual(command.count("-t"), 2)
 
@@ -191,6 +214,51 @@ class NucleiAdapterTests(unittest.TestCase):
         self.assertEqual(rows[0]["category"], "NUCLEI")
         self.assertEqual(rows[0]["endpoint_url"], "https://api.example.com/.git/config")
         self.assertIn("git-config", rows[0]["next_check"])
+
+    def test_allowlist_rejects_traversal_and_routes_only_from_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            templates = root / "templates"
+            templates.mkdir()
+            git_template = templates / "git-config.yaml"
+            jenkins_template = templates / "jenkins.yaml"
+            git_template.write_text("id: git-config\n", encoding="utf-8")
+            jenkins_template.write_text("id: jenkins\n", encoding="utf-8")
+            allowlist = root / "allowlist.txt"
+            allowlist.write_text(
+                "git,.git,source_control|git-config.yaml\n"
+                "jenkins|jenkins.yaml\n",
+                encoding="utf-8",
+            )
+            routes = load_nuclei_routes(allowlist, templates)
+            selected = select_nuclei_templates(routes, "SOURCE_CONTROL /.git/config")
+            self.assertEqual(selected, [git_template.resolve()])
+
+            allowlist.write_text("git|../outside.yaml\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "越界"):
+                load_nuclei_routes(allowlist, templates)
+
+    def test_nuclei_confirmation_merges_with_existing_endpoint(self) -> None:
+        checker = {
+            "endpoint_url": "https://api.example.com/.git/config",
+            "priority": "P1",
+            "confidence": "MEDIUM",
+            "next_check": "人工确认响应内容",
+            "category": "SOURCE_CONTROL",
+        }
+        nuclei = {
+            "endpoint_url": "https://api.example.com/.git/config",
+            "priority": "P2",
+            "confidence": "HIGH",
+            "next_check": "Nuclei 模板 git-config 命中",
+            "category": "NUCLEI",
+        }
+        rows = merge_findings([checker], [nuclei])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["priority"], "P1")
+        self.assertEqual(rows[0]["confidence"], "HIGH")
+        self.assertIn("Nuclei 模板 git-config 命中", rows[0]["next_check"])
+        self.assertEqual(rows[0]["category"], "SOURCE_CONTROL")
 
 
 if __name__ == "__main__":

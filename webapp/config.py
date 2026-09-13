@@ -96,6 +96,8 @@ class AppSettings:
         subfinder_path = shutil.which(self.subfinder_binary)
         dnsx_path = shutil.which(self.dnsx_binary)
         nuclei_path = shutil.which(self.nuclei_binary)
+        nuclei_templates_ready = self.nuclei_templates_dir.is_dir()
+        nuclei_allowlist_ready = self.nuclei_allowlist_file.is_file()
         return {
             "oneforall": bool(oneforall_script.is_file() and self.oneforall_python.is_file()),
             "oneforall_dir": str(self.oneforall_dir),
@@ -105,6 +107,9 @@ class AppSettings:
             "dnsx": bool(dnsx_path),
             "dnsx_path": dnsx_path or self.dnsx_binary,
             "nuclei": bool(nuclei_path),
+            "nuclei_ready": bool(
+                nuclei_path and nuclei_templates_ready and nuclei_allowlist_ready
+            ),
             "nuclei_path": nuclei_path or self.nuclei_binary,
             "nuclei_templates_dir": str(self.nuclei_templates_dir),
             "nuclei_allowlist_file": str(self.nuclei_allowlist_file),
