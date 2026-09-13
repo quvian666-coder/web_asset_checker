@@ -94,6 +94,25 @@ class OneForAllRequest(BaseModel):
     timeout: int = Field(default=1800, ge=60, le=7200)
 
 
+class SubfinderRequest(BaseModel):
+    enabled: bool = True
+    rate_limit: int = Field(default=5, ge=1, le=50)
+    timeout: int = Field(default=600, ge=60, le=3600)
+
+
+class DnsxRequest(BaseModel):
+    enabled: bool = True
+    rate_limit: int = Field(default=50, ge=1, le=500)
+    timeout: int = Field(default=600, ge=60, le=3600)
+
+
+class NucleiRequest(BaseModel):
+    enabled: bool = False
+    rate_limit: int = Field(default=2, ge=1, le=20)
+    concurrency: int = Field(default=2, ge=1, le=5)
+    timeout: int = Field(default=900, ge=60, le=3600)
+
+
 class CheckerRequest(BaseModel):
     enabled: bool = True
     concurrency: int = Field(default=10, ge=1, le=100)
@@ -122,8 +141,14 @@ class TaskRequest(BaseModel):
     manual_urls: list[str] = Field(default_factory=list, max_length=1000)
     authorization_confirmed: bool
     max_assets: int = Field(default=500, ge=1, le=5000)
+    discovery_preset: Literal["quick", "comprehensive", "legacy", "custom"] = (
+        "comprehensive"
+    )
     oneforall: OneForAllRequest = Field(default_factory=OneForAllRequest)
+    subfinder: SubfinderRequest = Field(default_factory=SubfinderRequest)
+    dnsx: DnsxRequest = Field(default_factory=DnsxRequest)
     checker: CheckerRequest = Field(default_factory=CheckerRequest)
+    nuclei: NucleiRequest = Field(default_factory=NucleiRequest)
     scope: ScopeRequest = Field(default_factory=ScopeRequest)
 
 
